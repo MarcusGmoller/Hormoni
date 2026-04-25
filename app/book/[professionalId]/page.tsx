@@ -38,7 +38,6 @@ export default function BookPage() {
       return
     }
 
-    // Byg tider (ISO) fra input
     const startTime = new Date(`${date}T${start}:00`)
     const endTime = new Date(startTime.getTime() + duration * 60 * 1000)
 

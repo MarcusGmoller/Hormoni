@@ -18,6 +18,7 @@ export default function DashboardPage() {
   const [loggingOut, setLoggingOut] = useState(false)
 
   const [appointments, setAppointments] = useState<Appointment[]>([])
+  const [professionalNamesById, setProfessionalNamesById] = useState<Record<string, string>>({})
   const [appointmentsLoading, setAppointmentsLoading] = useState(true)
   const [appointmentsError, setAppointmentsError] = useState<string | null>(null)
 
@@ -66,7 +67,32 @@ export default function DashboardPage() {
         return
       }
 
-      setAppointments((appts ?? []) as any)
+      const nextAppointments = (appts ?? []) as Appointment[]
+      setAppointments(nextAppointments)
+
+      const professionalIds = Array.from(
+        new Set(nextAppointments.map((appointment) => appointment.professional_id))
+      )
+
+      if (professionalIds.length === 0) {
+        setProfessionalNamesById({})
+        return
+      }
+
+      const { data: professionals } = await supabase
+        .from('profiles')
+        .select('id,full_name')
+        .in('id', professionalIds)
+
+      const namesById = (professionals ?? []).reduce<Record<string, string>>((acc, professional: any) => {
+        if (professional?.id && professional?.full_name) {
+          acc[professional.id] = professional.full_name
+        }
+
+        return acc
+      }, {})
+
+      setProfessionalNamesById(namesById)
     }
 
     run()
@@ -134,7 +160,7 @@ export default function DashboardPage() {
               </div>
 
               <div className="text-sm text-gray-600 mt-2">
-                Gynækolog ID: {a.professional_id}
+                Gynækolog: {professionalNamesById[a.professional_id] ?? a.professional_id}
               </div>
             </div>
           ))}

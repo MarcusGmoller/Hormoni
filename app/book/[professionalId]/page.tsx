@@ -58,7 +58,7 @@ export default function BookPage() {
       return
     }
 
-    router.push('/dashboard')
+    router.push('/userdashboard')
   }
 
   return (

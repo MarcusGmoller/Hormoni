@@ -4,14 +4,9 @@ import { createServerClient } from '@supabase/ssr'
 export async function GET(request: NextRequest) {
   const url = new URL(request.url)
   const code = url.searchParams.get('code')
-  const selectedRole = url.searchParams.get('role')
-  const role = selectedRole === 'professional' ? 'professional' : 'user'
+  const role = 'professional'
 
-  // response først, så vi kan sætte cookies på den
-  const response = NextResponse.redirect(
-    new URL(role === 'professional' ? '/gynaekolog-dashboard' : '/userdashboard', url.origin)
-  )
-
+  const response = NextResponse.redirect(new URL('/gynaekolog-dashboard', url.origin))
 
   if (!code) return response
 

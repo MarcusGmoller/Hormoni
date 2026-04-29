@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   const code = url.searchParams.get('code')
   const role = 'user'
 
-  const response = NextResponse.redirect(new URL('/userdashboard', url.origin))
+  const response = NextResponse.redirect(new URL('/onboarding', url.origin))
 
   if (!code) return response
 
@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   if (user) {
-    await supabase
+    const { data: profile } = await supabase
       .from('profiles')
       .upsert(
         {
@@ -44,6 +44,12 @@ export async function GET(request: NextRequest) {
         },
         { onConflict: 'id' }
       )
+      .select('profile_completed')
+      .single()
+
+    const destination = profile?.profile_completed ? '/userdashboard' : '/onboarding'
+    response.headers.set('location', new URL(destination, url.origin).toString())
+    return response
   }
 
   return response

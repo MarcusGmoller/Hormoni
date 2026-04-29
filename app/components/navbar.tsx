@@ -7,6 +7,7 @@ const navItems = [
   { href: '/', label: 'Forside' },
   { href: '/professionals', label: 'Gynaekologer' },
   { href: '/userdashboard', label: 'Dashboard' },
+  { href: '/health-log', label: 'Helbred log' },
   { href: '/login', label: 'Log ind' },
 ]
 

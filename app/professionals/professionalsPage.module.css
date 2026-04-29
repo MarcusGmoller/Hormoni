@@ -1,0 +1,147 @@
+.shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.lead {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.45;
+  max-width: 62ch;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.errorBanner {
+  border-radius: 10px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #be123c;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (min-width: 640px) {
+  .card {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+  }
+
+  .cardMain {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .cardAside {
+    flex-shrink: 0;
+    align-self: center;
+  }
+}
+
+.cardMain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.name {
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.25;
+}
+
+.titleLine {
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.bio {
+  margin: 0;
+  font-size: 14px;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.cardAside {
+  display: flex;
+  align-items: center;
+}
+
+.bookBtn {
+  padding: 10px 18px;
+  border-radius: 12px;
+  border: 1px solid #0ea5e9;
+  background: #0ea5e9;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.bookBtn:hover {
+  background: #0284c7;
+  border-color: #0284c7;
+}
+
+.loading {
+  margin: 0;
+  font-size: 14px;
+  color: #64748b;
+}
+
+.empty {
+  border: 1px dashed #e5e7eb;
+  border-radius: 14px;
+  padding: 24px;
+  text-align: center;
+  font-size: 14px;
+  color: #64748b;
+  background: #f8fafc;
+}

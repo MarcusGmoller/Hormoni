@@ -5,7 +5,8 @@ import Navbar from '@/app/components/navbar'
 
 export default function ConditionalChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const isMarketingShell = pathname === '/' || pathname === '/viden' || pathname === '/priser'
+  const isMarketingShell =
+    pathname === '/' || pathname === '/viden' || pathname === '/priser' || pathname === '/onboarding'
 
   if (isMarketingShell) {
     return <>{children}</>

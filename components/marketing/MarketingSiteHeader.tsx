@@ -42,14 +42,9 @@ export default function MarketingSiteHeader({
               Viden
             </span>
           ) : (
-            <a
-              href="/viden"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="transition hover:text-[#333333]"
-            >
+            <Link href="/viden" className="transition hover:text-[#333333]">
               Viden
-            </a>
+            </Link>
           )}
           <Link href="/community" className="transition hover:text-[#333333]">
             Community

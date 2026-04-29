@@ -108,8 +108,9 @@ export default function BookPage() {
     const loadProfessionals = async () => {
       const { data: prosRows, error: prosError } = await supabase
         .from('professionals')
-        .select('user_id,title,public_profile')
+        .select('user_id,title,public_profile,profiles!inner(role)')
         .eq('public_profile', true)
+        .eq('profiles.role', 'professional')
 
       if (prosError) {
         setError(prosError.message)
@@ -157,9 +158,10 @@ export default function BookPage() {
       if (!selectedProfessionalId) return
       const { data, error } = await supabase
         .from('professionals')
-        .select('user_id,title')
+        .select('user_id,title,profiles!inner(role)')
         .eq('user_id', selectedProfessionalId)
-        .single()
+        .eq('profiles.role', 'professional')
+        .maybeSingle()
 
       if (error) {
         setError(error.message)

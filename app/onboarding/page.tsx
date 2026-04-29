@@ -1,8 +1,17 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
+
+const inputClass =
+  'w-full rounded-xl border border-black/10 bg-white px-4 py-3 text-sm text-[#333333] placeholder:text-[#94a3b8] shadow-sm transition focus:border-[#849b87] focus:outline-none focus:ring-2 focus:ring-[#849b87]/20'
+const labelClass = 'mb-1.5 block text-sm font-medium text-[#333333]'
+const sageBtn =
+  'inline-flex items-center justify-center rounded-full bg-[#849b87] px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#738a7a] disabled:pointer-events-none disabled:opacity-45'
+const ghostBtn =
+  'inline-flex items-center justify-center rounded-full border border-black/15 bg-white px-6 py-3 text-sm font-semibold text-[#333333] transition hover:border-[#849b87]/50 hover:bg-[#f8faf9]'
 
 const SYMPTOM_OPTIONS = [
   'Hedeture',
@@ -42,6 +51,15 @@ const toSha256Hex = async (value: string) => {
     .join('')
 }
 
+type PlanRow = { id: string; name: string; description: string | null }
+
+const planBlurb: Record<string, string> = {
+  free: 'Én aktiv konsultation ad gangen. Ideelt til at komme i gang.',
+  pro: 'Book flere konsultationer og få fuld fleksibilitet i dit forløb.',
+}
+
+const TOTAL_STEPS = 3
+
 export default function OnboardingPage() {
   const router = useRouter()
 
@@ -54,7 +72,10 @@ export default function OnboardingPage() {
   const [selectedHealthConditions, setSelectedHealthConditions] = useState<string[]>([])
   const [medications, setMedications] = useState('')
   const [additionalNotes, setAdditionalNotes] = useState('')
-  const [step, setStep] = useState<1 | 2>(1)
+  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [availablePlans, setAvailablePlans] = useState<PlanRow[]>([])
+  const [plansLoaded, setPlansLoaded] = useState(false)
+  const [selectedPlanId, setSelectedPlanId] = useState<string>('free')
 
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -85,11 +106,25 @@ export default function OnboardingPage() {
   const addressIsValid = useMemo(() => address.trim().length > 3, [address])
 
   const stepOneIsValid = fullNameIsValid && addressIsValid && emailIsValid && phoneIsValid && cprIsValid
-  const formIsValid = stepOneIsValid
+  const planIds = useMemo(() => new Set(availablePlans.map((p) => p.id)), [availablePlans])
+  const planStepIsValid =
+    plansLoaded && availablePlans.length > 0 && planIds.has(selectedPlanId)
+  const formIsValid = stepOneIsValid && planStepIsValid
 
   useEffect(() => {
     setError(null)
-  }, [fullName, address, contactEmail, phone, cprNumber, selectedSymptoms, selectedHealthConditions, medications, additionalNotes])
+  }, [
+    fullName,
+    address,
+    contactEmail,
+    phone,
+    cprNumber,
+    selectedSymptoms,
+    selectedHealthConditions,
+    medications,
+    additionalNotes,
+    selectedPlanId,
+  ])
 
   const toggleItem = (current: string[], value: string, setter: (next: string[]) => void) => {
     if (current.includes(value)) {
@@ -184,86 +219,188 @@ export default function OnboardingPage() {
     bootstrap()
   }, [contactEmail, router])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadPlans = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (!user) return
+
+      const [{ data: profile }, { data: planRows, error: plansError }] = await Promise.all([
+        supabase.from('profiles').select('subscription_tier').eq('id', user.id).single(),
+        supabase.from('plans').select('id,name,description').order('id'),
+      ])
+
+      if (cancelled) return
+
+      if (plansError) {
+        console.error(plansError)
+      }
+
+      const plans = (planRows ?? []) as PlanRow[]
+      setAvailablePlans(plans)
+      const ids = new Set(plans.map((p) => p.id))
+
+      const rawTier = profile?.subscription_tier ?? 'free'
+      const legacyMapped =
+        rawTier === 'starter'
+          ? 'free'
+          : rawTier === 'plus' || rawTier === 'premium'
+            ? 'pro'
+            : rawTier
+      const resolved = ids.has(legacyMapped)
+        ? legacyMapped
+        : ids.has('free')
+          ? 'free'
+          : plans[0]?.id ?? 'free'
+      setSelectedPlanId(resolved)
+      setPlansLoaded(true)
+    }
+
+    loadPlans()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
-    <main className="mx-auto max-w-4xl p-6">
-      <h1 className="text-2xl font-semibold mb-2">Opret din profil</h1>
-      <p className="mb-4 text-sm text-gray-600">
-        Trin {step} af 2
-      </p>
+    <main className="mx-auto max-w-2xl px-4 py-8 md:py-12">
+      <header className="mb-8 border-b border-black/5 pb-6">
+        <Link href="/" className="text-lg font-semibold tracking-tight text-[#333333] transition hover:text-[#849b87]">
+          Hormoni(e)
+        </Link>
+        <h1 className="mt-4 text-2xl font-bold tracking-tight text-[#333333] md:text-[1.65rem]">Opret din profil</h1>
+        <p className="mt-2 text-sm leading-relaxed text-[#777777]">
+          Udfyld dine oplysninger, så vi kan tilpasse dit forløb.
+        </p>
+        <div className="mt-6 flex items-center gap-3">
+          <div className="flex flex-1 gap-1.5">
+            {[1, 2, 3].map((n) => (
+              <div
+                key={n}
+                className={`h-1.5 flex-1 rounded-full transition-colors ${step >= n ? 'bg-[#849b87]' : 'bg-[#e5e7eb]'}`}
+                aria-hidden
+              />
+            ))}
+          </div>
+          <span className="shrink-0 text-xs font-medium text-[#777777]">
+            Trin {step} af {TOTAL_STEPS}
+          </span>
+        </div>
+      </header>
 
-      {error && <div className="text-red-600 mb-4">Fejl: {error}</div>}
+      {error && (
+        <div
+          className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+          role="alert"
+        >
+          {error}
+        </div>
+      )}
 
-      <div className="space-y-3">
+      <div className="space-y-6">
         {step === 1 && (
-          <>
-            <input
-              className="border p-2 w-full"
-              placeholder="Fulde navn"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-            />
-
-            <input
-              className="border p-2 w-full"
-              placeholder="Adresse"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-            />
+          <div className="space-y-5 rounded-2xl border border-black/5 bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)] md:p-8">
+            <div>
+              <label className={labelClass} htmlFor="onboarding-fullname">
+                Fulde navn
+              </label>
+              <input
+                id="onboarding-fullname"
+                className={inputClass}
+                placeholder="Fx Anna Jensen"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                autoComplete="name"
+              />
+            </div>
 
             <div>
+              <label className={labelClass} htmlFor="onboarding-address">
+                Adresse
+              </label>
               <input
-                className="border p-2 w-full"
-                placeholder="Email (kontakt)"
+                id="onboarding-address"
+                className={inputClass}
+                placeholder="Vej og nummer, postnr. og by"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                autoComplete="street-address"
+              />
+            </div>
+
+            <div>
+              <label className={labelClass} htmlFor="onboarding-email">
+                E-mail (kontakt)
+              </label>
+              <input
+                id="onboarding-email"
+                className={inputClass}
+                type="email"
+                placeholder="din@email.dk"
                 value={contactEmail}
                 onChange={(e) => setContactEmail(e.target.value)}
+                autoComplete="email"
               />
               {!emailIsValid && contactEmail.trim().length > 0 && (
-                <div className="text-sm text-red-600 mt-1">Indtast en gyldig email.</div>
+                <p className="mt-1.5 text-sm text-red-600">Indtast en gyldig e-mail.</p>
               )}
             </div>
 
             <div>
+              <label className={labelClass} htmlFor="onboarding-phone">
+                Telefon
+              </label>
               <input
-                className="border p-2 w-full"
-                placeholder="Telefon (8 cifre)"
+                id="onboarding-phone"
+                className={inputClass}
+                placeholder="8 cifre (fx 12345678)"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 inputMode="numeric"
+                autoComplete="tel"
               />
               {!phoneIsValid && phone.trim().length > 0 && (
-                <div className="text-sm text-red-600 mt-1">
-                  Telefonnummer skal være præcis 8 cifre (fx 12345678). Du må gerne skrive +45, vi fjerner det automatisk.
-                </div>
+                <p className="mt-1.5 text-sm text-red-600">
+                  Telefonnummer skal være 8 cifre. Du må gerne skrive +45 — det fjernes automatisk.
+                </p>
               )}
             </div>
 
             <div>
+              <label className={labelClass} htmlFor="onboarding-cpr">
+                CPR-nummer
+              </label>
               <input
-                className="border p-2 w-full"
-                placeholder="CPR-nummer (10 cifre)"
+                id="onboarding-cpr"
+                className={inputClass}
+                placeholder="10 cifre"
                 value={cprNumber}
                 onChange={(e) => setCprNumber(e.target.value)}
                 inputMode="numeric"
+                autoComplete="off"
               />
               {!cprIsValid && cprNumber.trim().length > 0 && (
-                <div className="text-sm text-red-600 mt-1">CPR-nummer skal være præcis 10 cifre.</div>
+                <p className="mt-1.5 text-sm text-red-600">CPR-nummer skal være præcis 10 cifre.</p>
               )}
             </div>
-          </>
+          </div>
         )}
 
         {step === 2 && (
-          <div className="space-y-6 rounded-2xl border border-gray-200 bg-white p-8">
+          <div className="space-y-8 rounded-2xl border border-black/5 bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)] md:p-8">
             <div>
-              <h2 className="text-4xl font-semibold text-gray-800">Helbred & symptomer</h2>
-              <p className="mt-2 text-2xl text-gray-500">
-                Dette hjælper os med at give dig den bedste behandling
+              <h2 className="text-xl font-bold text-[#333333] md:text-2xl">Helbred og symptomer</h2>
+              <p className="mt-2 text-sm leading-relaxed text-[#777777]">
+                Det hjælper os med at give dig den bedste behandling.
               </p>
             </div>
 
             <div>
-              <label className="mb-4 block text-lg font-semibold">Hvilke symptomer oplever du? *</label>
-              <div className="grid gap-3 md:grid-cols-3">
+              <p className="mb-3 text-sm font-semibold text-[#333333]">Hvilke symptomer oplever du?</p>
+              <div className="grid gap-2.5 sm:grid-cols-2 md:grid-cols-3">
                 {SYMPTOM_OPTIONS.map((symptom) => {
                   const selected = selectedSymptoms.includes(symptom)
                   return (
@@ -272,8 +409,10 @@ export default function OnboardingPage() {
                       type="button"
                       onClick={() => toggleItem(selectedSymptoms, symptom, setSelectedSymptoms)}
                       className={[
-                        'rounded-xl border px-4 py-3 text-center transition-colors',
-                        selected ? 'border-black bg-black text-white' : 'border-gray-300 text-gray-800 hover:bg-gray-50',
+                        'rounded-xl border px-3 py-2.5 text-center text-sm font-medium transition-colors',
+                        selected
+                          ? 'border-[#849b87] bg-[#849b87]/12 text-[#333333] ring-1 ring-[#849b87]/35'
+                          : 'border-black/10 text-[#4a4a4a] hover:border-[#849b87]/35 hover:bg-[#f8faf9]',
                       ].join(' ')}
                     >
                       {symptom}
@@ -284,8 +423,8 @@ export default function OnboardingPage() {
             </div>
 
             <div>
-              <label className="mb-4 block text-lg font-semibold">Har du nogle af følgende helbredstilstande?</label>
-              <div className="grid gap-3 md:grid-cols-2">
+              <p className="mb-3 text-sm font-semibold text-[#333333]">Har du nogle af følgende helbredstilstande?</p>
+              <div className="grid gap-2.5 sm:grid-cols-2">
                 {HEALTH_CONDITION_OPTIONS.map((condition) => {
                   const selected = selectedHealthConditions.includes(condition)
                   return (
@@ -296,8 +435,10 @@ export default function OnboardingPage() {
                         toggleItem(selectedHealthConditions, condition, setSelectedHealthConditions)
                       }
                       className={[
-                        'rounded-xl border px-4 py-3 text-center transition-colors',
-                        selected ? 'border-black bg-black text-white' : 'border-gray-300 text-gray-800 hover:bg-gray-50',
+                        'rounded-xl border px-3 py-2.5 text-center text-sm font-medium transition-colors',
+                        selected
+                          ? 'border-[#849b87] bg-[#849b87]/12 text-[#333333] ring-1 ring-[#849b87]/35'
+                          : 'border-black/10 text-[#4a4a4a] hover:border-[#849b87]/35 hover:bg-[#f8faf9]',
                       ].join(' ')}
                     >
                       {condition}
@@ -308,9 +449,12 @@ export default function OnboardingPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-medium">Tager du nogen medicin?</label>
+              <label className={labelClass} htmlFor="onboarding-meds">
+                Tager du medicin?
+              </label>
               <textarea
-                className="min-h-24 border p-2 w-full"
+                id="onboarding-meds"
+                className={`${inputClass} min-h-[100px] resize-y`}
                 placeholder="Skriv hvilken medicin du tager"
                 value={medications}
                 onChange={(e) => setMedications(e.target.value)}
@@ -318,10 +462,13 @@ export default function OnboardingPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-medium">Er der andet, vi skal vide?</label>
+              <label className={labelClass} htmlFor="onboarding-notes">
+                Andet vi skal vide?
+              </label>
               <textarea
-                className="min-h-24 border p-2 w-full"
-                placeholder="Skriv eventuelle ekstra oplysninger"
+                id="onboarding-notes"
+                className={`${inputClass} min-h-[100px] resize-y`}
+                placeholder="Valgfrit — ekstra oplysninger til dit forløb"
                 value={additionalNotes}
                 onChange={(e) => setAdditionalNotes(e.target.value)}
               />
@@ -329,13 +476,60 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        <div className="flex gap-2">
+        {step === 3 && (
+          <div className="space-y-6 rounded-2xl border border-black/5 bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)] md:p-8">
+            <div>
+              <h2 className="text-xl font-bold text-[#333333] md:text-2xl">Vælg plan</h2>
+              <p className="mt-2 text-sm leading-relaxed text-[#777777]">
+                Vælg den plan der passer til dit forløb. Du kan skifte den senere under Abonnement.
+              </p>
+            </div>
+
+            {!plansLoaded ? (
+              <p className="text-sm text-[#777777]">Henter planer…</p>
+            ) : availablePlans.length === 0 ? (
+              <p className="text-sm text-red-700">
+                Kunne ikke indlæse abonnementsplaner. Prøv at genindlæse siden, eller kontakt support.
+              </p>
+            ) : (
+              <div className="grid gap-3">
+                {availablePlans.map((plan) => {
+                  const selected = plan.id === selectedPlanId
+                  const description =
+                    plan.description?.trim() || planBlurb[plan.id] || 'Abonnementsplan.'
+                  return (
+                    <button
+                      key={plan.id}
+                      type="button"
+                      onClick={() => setSelectedPlanId(plan.id)}
+                      className={[
+                        'rounded-xl border px-4 py-4 text-left transition-colors',
+                        selected
+                          ? 'border-[#849b87] bg-[#849b87]/12 ring-1 ring-[#849b87]/35'
+                          : 'border-black/10 hover:border-[#849b87]/35 hover:bg-[#f8faf9]',
+                      ].join(' ')}
+                    >
+                      <div className="text-sm font-semibold text-[#333333]">{plan.name}</div>
+                      <div className="mt-1 text-sm leading-relaxed text-[#777777]">{description}</div>
+                      {selected ? (
+                        <span className="mt-2 inline-block text-xs font-medium text-[#849b87]">Valgt</span>
+                      ) : null}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3 pt-2">
           {step === 2 && (
-            <button
-              onClick={() => setStep(1)}
-              className="border rounded px-4 py-3"
-              type="button"
-            >
+            <button onClick={() => setStep(1)} className={ghostBtn} type="button">
+              Tilbage
+            </button>
+          )}
+          {step === 3 && (
+            <button onClick={() => setStep(2)} className={ghostBtn} type="button">
               Tilbage
             </button>
           )}
@@ -344,18 +538,18 @@ export default function OnboardingPage() {
             <button
               onClick={() => setStep(2)}
               disabled={!stepOneIsValid}
-              className="bg-black text-white rounded px-4 py-3 disabled:opacity-50"
+              className={sageBtn}
               type="button"
             >
               Næste
             </button>
+          ) : step === 2 ? (
+            <button onClick={() => setStep(3)} className={sageBtn} type="button">
+              Næste
+            </button>
           ) : (
-            <button
-              onClick={save}
-              disabled={saving || !formIsValid}
-              className="bg-black text-white rounded px-4 py-3 disabled:opacity-50"
-            >
-              {saving ? 'Gemmer...' : 'Færdig'}
+            <button onClick={save} disabled={saving || !formIsValid} className={sageBtn} type="button">
+              {saving ? 'Gemmer…' : 'Afslut og gå til dit dashboard'}
             </button>
           )}
         </div>

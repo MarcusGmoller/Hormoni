@@ -25,8 +25,9 @@ export default function ProfessionalsPage() {
       setLoading(true)
       const { data: professionals, error: loadError } = await supabase
         .from('professionals')
-        .select('user_id,title,bio,public_profile,profiles(full_name)')
+        .select('user_id,title,bio,public_profile,profiles!inner(full_name,role)')
         .eq('public_profile', true)
+        .eq('profiles.role', 'professional')
 
       if (loadError) {
         setError(loadError.message)

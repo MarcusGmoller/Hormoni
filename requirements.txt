@@ -1,0 +1,30 @@
+# =============================================================================
+# Frontend — krav og afhængigheder (Node.js / Next.js)
+# =============================================================================
+# Denne fil er til mennesker og CI-dokumentation. Den erstatter ikke package.json.
+# Brug ikke "pip install -r requirements.txt" — dette er ikke et Python-projekt.
+#
+# Installation:
+#   npm install
+#
+# Scripts:
+#   npm run dev    — udviklingsserver
+#   npm run build  — produktionsbuild
+#   npm run start  — kør build lokalt
+#   npm run lint   — ESLint
+# =============================================================================
+
+# --- Runtime ---
+# Anbefalet til Next.js 16: Node.js 20.9+ (LTS). npm følger normalt med Node.
+Node.js >= 20.9.0
+
+# --- Miljøvariabler (.env.local, ikke committet) ---
+# NEXT_PUBLIC_SUPABASE_URL
+# NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
+# --- npm dependencies (versioner i package.json) ---
+# Produktion:
+#   @supabase/ssr, @supabase/supabase-js, googleapis, lucide-react, next, react, react-dom
+# Udvikling:
+#   @tailwindcss/postcss, @types/node, @types/react, @types/react-dom,
+#   eslint, eslint-config-next, tailwindcss, typescript

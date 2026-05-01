@@ -148,7 +148,20 @@ export default function OnboardingPage() {
       data: { user },
     } = await supabase.auth.getUser()
     if (!user) {
+      setSaving(false)
       router.push('/login')
+      return
+    }
+
+    // Sikrer at PostgREST-kald får en frisk JWT (undgår RLS-fejl når session i hukommelse
+    // og getUser() er ude af trit — ses især efter production build).
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
+    if (refreshError || !refreshData.session) {
+      setSaving(false)
+      setError(
+        refreshError?.message ??
+          'Session kunne ikke bekræftes. Prøv at logge ud og ind igen.'
+      )
       return
     }
 
@@ -168,20 +181,22 @@ export default function OnboardingPage() {
     const normalizedCpr = normalizeCpr(cprNumber)
     const cprHash = await toSha256Hex(normalizedCpr)
 
-    const { error: cprVaultError } = await supabase
-      .from('user_cpr_vault')
-      .upsert(
-        {
-          user_id: user.id,
-          cpr_ciphertext: normalizedCpr,
-          cpr_hash: cprHash,
-        },
-        { onConflict: 'user_id' }
-      )
-
-    if (cprVaultError) {
+    const accessToken = refreshData.session.access_token
+    const cprRes = await fetch(`${window.location.origin}/api/user-cpr-vault`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        cpr_ciphertext: normalizedCpr,
+        cpr_hash: cprHash,
+      }),
+    })
+    const cprJson = (await cprRes.json().catch(() => ({}))) as { error?: string }
+    if (!cprRes.ok) {
       setSaving(false)
-      setError(cprVaultError.message)
+      setError(cprJson.error ?? 'Kunne ikke gemme CPR. Prøv igen.')
       return
     }
 
@@ -197,7 +212,7 @@ export default function OnboardingPage() {
       return
     }
 
-    router.push('/userdashboard')
+    router.push('/dashboard')
   }
 
   useEffect(() => {

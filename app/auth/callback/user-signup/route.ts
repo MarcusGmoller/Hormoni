@@ -1,10 +1,7 @@
 import { NextRequest } from 'next/server'
 import { completeUserGoogleOAuth } from '@/lib/completeUserGoogleOAuth'
 
-/**
- * Bagudkompatibel callback. Opfører sig som **signup** (onboarding hvis profil mangler).
- * Nye flows: brug `/auth/callback/user-signin` eller `user-signup`.
- */
+/** Google + fanen "Opret konto" → onboarding hvis profil ikke er færdig. */
 export async function GET(request: NextRequest) {
   return completeUserGoogleOAuth(request, 'signup')
 }

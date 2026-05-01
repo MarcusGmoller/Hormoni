@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
+import { syncProfileAfterAuthAndResolvePath } from '@/lib/authPostLogin'
 
 function LoginForm() {
   const router = useRouter()
@@ -29,9 +30,13 @@ function LoginForm() {
     setError(null)
     setMessage(null)
     const callbackPath =
-      selectedRole === 'professional' ? '/auth/callback/professional' : '/auth/callback/user'
+      selectedRole === 'professional' ? '/auth/callback/professional' : '/auth/oauth/user'
     const callbackUrl = new URL(callbackPath, location.origin)
     callbackUrl.searchParams.set('selected_role', selectedRole)
+    if (selectedRole === 'user') {
+      const intent = authMode === 'signup' ? 'signup' : 'signin'
+      callbackUrl.searchParams.set('intent', intent)
+    }
 
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -51,27 +56,8 @@ function LoginForm() {
       return
     }
 
-    const { error: upsertError } = await supabase.from('profiles').upsert(
-      {
-        id: user.id,
-        email: user.email ?? null,
-        role: 'user',
-      },
-      { onConflict: 'id' }
-    )
-
-    if (upsertError) {
-      setError(upsertError.message)
-      return
-    }
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('profile_completed')
-      .eq('id', user.id)
-      .single()
-
-    router.push(profile?.profile_completed ? '/userdashboard' : '/onboarding')
+    const destination = await syncProfileAfterAuthAndResolvePath(supabase, user)
+    router.push(destination)
     router.refresh()
   }
 

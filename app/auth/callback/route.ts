@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { syncProfileAfterAuthAndResolvePath } from '@/lib/authPostLogin'
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url)
@@ -9,7 +10,7 @@ export async function GET(request: NextRequest) {
 
   // response først, så vi kan sætte cookies på den
   const response = NextResponse.redirect(
-    new URL(role === 'professional' ? '/gynaekolog-dashboard' : '/userdashboard', url.origin)
+    new URL(role === 'professional' ? '/gynaekolog-dashboard' : '/dashboard', url.origin)
   )
 
 
@@ -39,9 +40,8 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   if (user) {
-    await supabase
-      .from('profiles')
-      .upsert(
+    if (role === 'professional') {
+      await supabase.from('profiles').upsert(
         {
           id: user.id,
           email: user.email ?? null,
@@ -49,6 +49,10 @@ export async function GET(request: NextRequest) {
         },
         { onConflict: 'id' }
       )
+    } else {
+      const destination = await syncProfileAfterAuthAndResolvePath(supabase, user)
+      response.headers.set('location', new URL(destination, url.origin).toString())
+    }
   }
 
   return response

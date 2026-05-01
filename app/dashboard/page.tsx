@@ -173,9 +173,21 @@ export default function DashboardPage() {
         return
       }
 
-      if (!profile?.profile_completed) {
+      const oauthSignin =
+        typeof window !== 'undefined' &&
+        new URLSearchParams(window.location.search).get('oauth_signin') === '1'
+
+      if (!profile?.profile_completed && !oauthSignin) {
         router.push('/onboarding')
         return
+      }
+
+      if (oauthSignin && typeof window !== 'undefined') {
+        const u = new URL(window.location.href)
+        if (u.searchParams.has('oauth_signin')) {
+          u.searchParams.delete('oauth_signin')
+          window.history.replaceState(null, '', `${u.pathname}${u.search}${u.hash}`)
+        }
       }
 
       setDisplayName(profile.full_name ?? 'Bruger')

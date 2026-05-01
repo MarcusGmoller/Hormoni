@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@supabase/supabase-js'
 import type { EmailOtpType } from '@supabase/supabase-js'
+import { syncProfileAfterAuthAndResolvePath } from '@/lib/authPostLogin'
 
 /**
  * E-mailbekræftelse: Opretter en NY Supabase-klient her, så detectSessionInUrl læser den aktuelle URL.
@@ -43,24 +44,10 @@ function ConfirmContent() {
     }
 
     const finishProfileAndGo = async (userId: string, userEmail: string | null | undefined) => {
-      const { error: upsertError } = await client.from('profiles').upsert(
-        {
-          id: userId,
-          email: userEmail ?? null,
-          role: 'user',
-        },
-        { onConflict: 'id' }
-      )
-      if (upsertError) {
-        redirectLogin('msg', upsertError.message)
-        return
-      }
-      const { data: profile } = await client
-        .from('profiles')
-        .select('profile_completed')
-        .eq('id', userId)
-        .single()
-      const dest = profile?.profile_completed ? '/userdashboard' : '/onboarding'
+      const dest = await syncProfileAfterAuthAndResolvePath(client, {
+        id: userId,
+        email: userEmail ?? null,
+      })
       window.history.replaceState(null, '', `${window.location.pathname}`)
       router.replace(dest)
       router.refresh()

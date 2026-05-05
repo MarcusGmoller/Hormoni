@@ -135,3 +135,70 @@
   font-size: 14px;
   color: #64748b;
 }
+
+.stripePlaceholderCard {
+  margin-top: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.stripePlaceholderTitle {
+  font-size: 14px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.stripePlaceholderMeta {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.4;
+}
+
+.stripePlaceholderGrid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stripeField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.stripeField input {
+  border: 1px solid #bfdbfe;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #0f172a;
+}
+
+.stripePlaceholderPayBtn {
+  margin-top: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.stripePlaceholderPayBtn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.stripePlaceholderPayBtn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}

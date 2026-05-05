@@ -1,0 +1,90 @@
+# =============================================================================
+# KOM I GANG (for nybegyndere) - Frontend projekt
+# =============================================================================
+# Denne liste er lavet til dig, der aldrig har kodet før.
+# Følg punkterne i rækkefølge.
+#
+# Vigtigt:
+# - Dette er IKKE et Python-projekt.
+# - Du skal IKKE køre: pip install -r requirements.txt
+# =============================================================================
+
+1) Installer Node.js
+   - Gå til: https://nodejs.org
+   - Download "LTS" versionen (anbefalet: 20.9 eller nyere)
+   - Installer med standardvalg
+
+2) Tjek at Node og npm virker
+   - Åbn terminal i projektmappen
+   - Kør:
+     node -v
+     npm -v
+
+2.1) Installer Git (kræves for GitHub)
+   - Gå til: https://git-scm.com/downloads
+   - Download og installer Git med standardvalg
+   - Tjek at Git virker:
+     git --version
+
+2.2) Hent koden ned fra GitHub (clone)
+   - Åbn terminal der, hvor du vil have projektmappen
+   - Kør:
+     git clone <DIN_GITHUB_REPO_URL>
+   - Gå ind i mappen:
+     cd <REPO_NAVN>
+
+3) Installer projektets pakker
+   - Kør:
+     npm install
+
+4) Opret miljøfil 
+   - Lav filen: .env.local
+   - Sæt disse værdier ind:
+    NEXT_PUBLIC_SUPABASE_URL=https://cdmlkwvjmzsmgrwbcyfy.supabase.co
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_IMIPNFHYq2cIVb3nm0ShSg_x2u0OKxK
+
+5) Start appen lokalt
+   - Kør:
+     npm run dev
+   - Åbn derefter:
+     http://localhost:3000
+
+6) Nyttige kommandoer
+   - Udvikling:
+     npm run dev
+   - Tjek kodekvalitet:
+     npm run lint
+   - Byg til produktion:
+     npm run build
+   - Kør produktionsbuild lokalt:
+     npm run start
+
+6.1) Gem ændringer og push til GitHub
+   - Se hvilke filer du har ændret:
+     git status
+   - Tilføj ændringer:
+     git add .
+   - Lav commit:
+     git commit -m "Kort besked om hvad du har ændret"
+   - Push til GitHub:
+     git push
+   - Første gang på en ny branch kan du få besked om:
+     git push -u origin <branch-navn>
+
+7) Hvis noget fejler
+   - Slet node_modules + package-lock.json
+   - Kør igen:
+     npm install
+     npm run dev
+
+# =============================================================================
+# Kort forklaring af hvad der bruges i projektet
+# =============================================================================
+# Runtime:
+# - Node.js >= 20.9
+#
+# Centrale npm pakker (ligger i package.json):
+# - next, react, react-dom
+# - @supabase/ssr, @supabase/supabase-js
+# - typescript, eslint, eslint-config-next, tailwindcss
+# =============================================================================

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
@@ -27,10 +27,27 @@ type OpenSlot = {
   is_booked: boolean
 }
 
+type DerivedOpenSlot = {
+  id: string
+  start_time: string
+  end_time: string
+}
+
+const CONSULTATION_MINUTES = 20
+const BUFFER_MINUTES = 5
+const SLOT_STEP_MINUTES = CONSULTATION_MINUTES + BUFFER_MINUTES
+const CONSULTATION_MS = CONSULTATION_MINUTES * 60 * 1000
+const SLOT_STEP_MS = SLOT_STEP_MINUTES * 60 * 1000
+
+const rangesOverlap = (startA: number, endA: number, startB: number, endB: number) =>
+  startA < endB && endA > startB
+
 export default function BookPage() {
   const router = useRouter()
   const params = useParams<{ professionalId: string }>()
+  const searchParams = useSearchParams()
   const professionalId = params.professionalId
+  const preselectedSlotStart = searchParams.get('slotStart')
 
   const [professionals, setProfessionals] = useState<ProfessionalDetails[]>([])
   const [selectedProfessionalId, setSelectedProfessionalId] = useState(professionalId)
@@ -108,9 +125,9 @@ export default function BookPage() {
     const loadProfessionals = async () => {
       const { data: prosRows, error: prosError } = await supabase
         .from('professionals')
-        .select('user_id,title,public_profile,profiles!inner(role)')
+        .select('user_id,title,professional_name,public_profile,approval_status')
         .eq('public_profile', true)
-        .eq('profiles.role', 'professional')
+        .eq('approval_status', 'approved')
 
       if (prosError) {
         setError(prosError.message)
@@ -120,6 +137,7 @@ export default function BookPage() {
       const professionalsBase = (prosRows ?? []) as Array<{
         user_id: string
         title: string | null
+        professional_name: string | null
         public_profile: boolean
       }>
       const ids = professionalsBase.map((p) => p.user_id)
@@ -128,20 +146,10 @@ export default function BookPage() {
         return
       }
 
-      const { data: profileRows } = await supabase
-        .from('profiles')
-        .select('id,full_name')
-        .in('id', ids)
-
-      const namesById = (profileRows ?? []).reduce<Record<string, string>>((acc, row: any) => {
-        if (row?.id && row?.full_name) acc[row.id] = row.full_name
-        return acc
-      }, {})
-
       const merged = professionalsBase.map((p) => ({
         user_id: p.user_id,
         title: p.title,
-        full_name: namesById[p.user_id] ?? null,
+        full_name: p.professional_name ?? null,
       }))
 
       setProfessionals(merged)
@@ -158,9 +166,9 @@ export default function BookPage() {
       if (!selectedProfessionalId) return
       const { data, error } = await supabase
         .from('professionals')
-        .select('user_id,title,profiles!inner(role)')
+        .select('user_id,title,professional_name,approval_status')
         .eq('user_id', selectedProfessionalId)
-        .eq('profiles.role', 'professional')
+        .eq('approval_status', 'approved')
         .maybeSingle()
 
       if (error) {
@@ -168,22 +176,17 @@ export default function BookPage() {
         return
       }
 
-      const professionalData = (data as { user_id: string; title: string | null } | null) ?? null
+      const professionalData =
+        (data as { user_id: string; title: string | null; professional_name: string | null } | null) ?? null
       if (!professionalData) {
         setProfessional(null)
         return
       }
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', professionalData.user_id)
-        .maybeSingle()
-
       setProfessional({
         user_id: professionalData.user_id,
         title: professionalData.title,
-        full_name: profile?.full_name ?? null,
+        full_name: professionalData.professional_name ?? null,
       })
     }
 
@@ -241,17 +244,57 @@ export default function BookPage() {
     setSelectedSlotId('')
   }, [selectedProfessionalId])
 
+  const expandedSlots = useMemo<DerivedOpenSlot[]>(() => {
+    const nowMs = Date.now()
+    const derived: DerivedOpenSlot[] = []
+
+    for (const slot of openSlots) {
+      const windowStart = new Date(slot.start_time).getTime()
+      const windowEnd = new Date(slot.end_time).getTime()
+      if (Number.isNaN(windowStart) || Number.isNaN(windowEnd) || windowEnd <= windowStart) continue
+
+      let chunkStart = windowStart
+      while (chunkStart + CONSULTATION_MS <= windowEnd) {
+        if (chunkStart >= nowMs) {
+          const chunkEnd = chunkStart + CONSULTATION_MS
+          const isoStart = new Date(chunkStart).toISOString()
+          const isoEnd = new Date(chunkEnd).toISOString()
+          derived.push({
+            id: `${slot.id}__${isoStart}`,
+            start_time: isoStart,
+            end_time: isoEnd,
+          })
+        }
+        chunkStart += SLOT_STEP_MS
+      }
+    }
+
+    return derived.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+  }, [openSlots])
+
   const availableSlots = useMemo(() => {
-    return openSlots.filter((slot) => {
+    return expandedSlots.filter((slot) => {
       const slotStart = new Date(slot.start_time).getTime()
       const slotEnd = new Date(slot.end_time).getTime()
-      return !bookedAppointments.some((appointment) => {
-        const appointmentStart = new Date(appointment.start_time).getTime()
-        const appointmentEnd = new Date(appointment.end_time).getTime()
-        return slotStart < appointmentEnd && slotEnd > appointmentStart
-      })
+      return !bookedAppointments.some((appointment) =>
+        rangesOverlap(
+          slotStart,
+          slotEnd,
+          new Date(appointment.start_time).getTime(),
+          new Date(appointment.end_time).getTime()
+        )
+      )
     })
-  }, [openSlots, bookedAppointments])
+  }, [expandedSlots, bookedAppointments])
+
+  useEffect(() => {
+    if (!preselectedSlotStart) return
+    const targetStart = Number(preselectedSlotStart)
+    if (!Number.isFinite(targetStart)) return
+    const targetIso = new Date(targetStart).toISOString()
+    const match = availableSlots.find((slot) => slot.start_time === targetIso)
+    if (match) setSelectedSlotId(match.id)
+  }, [preselectedSlotStart, availableSlots])
 
   const selectedSlot = useMemo(
     () => availableSlots.find((slot) => slot.id === selectedSlotId) ?? null,
@@ -307,35 +350,35 @@ export default function BookPage() {
       }
     }
 
-    const { data: claimedSlots, error: claimError } = await supabase
-      .from('professional_open_slots')
-      .update({ is_booked: true })
-      .eq('id', selectedSlot.id)
+    const { data: overlappingRows, error: overlappingError } = await supabase
+      .from('appointments')
+      .select('id')
       .eq('professional_id', selectedProfessionalId)
-      .eq('is_booked', false)
-      .select('id,start_time,end_time')
+      .in('status', ['requested', 'confirmed'])
+      .lt('start_time', selectedSlot.end_time)
+      .gt('end_time', selectedSlot.start_time)
       .limit(1)
 
-    if (claimError || !claimedSlots || claimedSlots.length === 0) {
+    if (overlappingError) {
+      setSaving(false)
+      setError(overlappingError.message)
+      return
+    }
+
+    if ((overlappingRows ?? []).length > 0) {
       setSaving(false)
       setError('Tiden blev lige booket af en anden. Vælg venligst en ny tid.')
       return
     }
 
-    const claimed = claimedSlots[0] as { id: string; start_time: string; end_time: string }
-    const startTime = new Date(claimed.start_time)
-    const endTime = new Date(claimed.end_time)
+    const startTime = new Date(selectedSlot.start_time)
+    const endTime = new Date(selectedSlot.end_time)
 
     const {
       data: { session },
     } = await supabase.auth.getSession()
     const accessToken = session?.access_token
     if (!accessToken) {
-      await supabase
-        .from('professional_open_slots')
-        .update({ is_booked: false })
-        .eq('id', claimed.id)
-        .eq('professional_id', selectedProfessionalId)
       setSaving(false)
       setError('Du skal være logget ind for at booke. Prøv at logge ind igen.')
       return
@@ -361,11 +404,6 @@ export default function BookPage() {
     }
 
     if (!meetRes.ok || !meetPayload.googleMeetUrl || !meetPayload.meetOpenAt) {
-      await supabase
-        .from('professional_open_slots')
-        .update({ is_booked: false })
-        .eq('id', claimed.id)
-        .eq('professional_id', selectedProfessionalId)
       setSaving(false)
       setError(
         meetPayload.error ??
@@ -387,20 +425,12 @@ export default function BookPage() {
       })
 
     if (insertError) {
-      await supabase
-        .from('professional_open_slots')
-        .update({ is_booked: false })
-        .eq('id', claimed.id)
-        .eq('professional_id', selectedProfessionalId)
-    }
-
-    setSaving(false)
-
-    if (insertError) {
       setError(insertError.message)
+      setSaving(false)
       return
     }
 
+    setSaving(false)
     router.push('/userdashboard')
   }
 

@@ -52,7 +52,6 @@ type Prescription = {
   dosage: string | null
   instructions: string | null
   issued_at: string
-  doctor_id: string
 }
 
 type HealthConditionLog = {
@@ -135,6 +134,57 @@ export default function DashboardPage() {
   const [patientUserId, setPatientUserId] = useState<string | null>(null)
   const [inboxSeenTick, setInboxSeenTick] = useState(0)
   const [openTreatmentStepId, setOpenTreatmentStepId] = useState<string | null>(null)
+  const [showPrescriptionHistory, setShowPrescriptionHistory] = useState(false)
+  const [dashboardLocked, setDashboardLocked] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const signOutUser = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
+
+  const deleteMyProfile = async () => {
+    if (deleteBusy) return
+    if (deleteConfirmText.trim().toUpperCase() !== 'SLET MIN PROFIL') {
+      setDeleteError('Skriv præcist "SLET MIN PROFIL" for at fortsætte.')
+      return
+    }
+    setDeleteBusy(true)
+    setDeleteError(null)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const accessToken = session?.access_token
+    if (!accessToken) {
+      setDeleteBusy(false)
+      setDeleteError('Session udløbet. Log ind igen.')
+      router.push('/login')
+      return
+    }
+
+    const response = await fetch('/api/user/delete-profile', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ confirmText: deleteConfirmText }),
+    })
+    const json = (await response.json().catch(() => ({}))) as { error?: string }
+
+    if (!response.ok) {
+      setDeleteBusy(false)
+      setDeleteError(json.error ?? 'Kunne ikke slette profilen. Prøv igen.')
+      return
+    }
+
+    await supabase.auth.signOut()
+    setDeleteBusy(false)
+    router.push('/login')
+  }
 
   useEffect(() => {
     const run = async () => {
@@ -153,6 +203,11 @@ export default function DashboardPage() {
           .single(),
         supabase.from('plans').select('id,name').order('id'),
       ])
+      const { data: professional } = await supabase
+        .from('professionals')
+        .select('approval_status')
+        .eq('user_id', user.id)
+        .maybeSingle()
 
       if (error) {
         console.error(error)
@@ -168,8 +223,12 @@ export default function DashboardPage() {
       setAvailablePlans(plans)
       const planIds = new Set(plans.map((p) => p.id))
 
-      if (profile?.role === 'professional') {
+      if (professional?.approval_status === 'approved') {
         router.push('/gynaekolog-dashboard')
+        return
+      }
+      if (professional) {
+        router.push('/gynaekolog-pending')
         return
       }
 
@@ -204,6 +263,7 @@ export default function DashboardPage() {
           ? 'free'
           : plans[0]?.id ?? 'free'
       setSubscriptionPlanId(resolvedPlanId)
+      setDashboardLocked(resolvedPlanId !== 'pro')
       setLoading(false)
 
       setAppointmentsLoading(true)
@@ -231,7 +291,7 @@ export default function DashboardPage() {
 
       const { data: rawPrescriptions, error: rawPrescriptionsError } = await supabase
         .from('prescriptions')
-        .select('id,medication_name,dosage,instructions,issued_at,doctor_id')
+        .select('id,medication_name,dosage,instructions,issued_at')
         .eq('patient_id', user.id)
         .order('issued_at', { ascending: false })
         .limit(10)
@@ -240,7 +300,14 @@ export default function DashboardPage() {
         setPrescriptionsError(rawPrescriptionsError.message)
         setPrescriptions([])
       } else {
-        setPrescriptions((rawPrescriptions ?? []) as Prescription[])
+        const normalized = ((rawPrescriptions ?? []) as any[]).map((row) => ({
+          id: row.id,
+          medication_name: row.medication_name ?? row.medication ?? 'Ukendt medicin',
+          dosage: row.dosage ?? row.dose ?? null,
+          instructions: row.instructions ?? row.instruction ?? null,
+          issued_at: row.issued_at,
+        })) as Prescription[]
+        setPrescriptions(normalized)
       }
 
       const { data: rawHealthLogs, error: rawHealthLogsError } = await supabase
@@ -472,6 +539,8 @@ export default function DashboardPage() {
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
       .slice(-7)
   }, [healthLogs])
+  const latestPrescription = prescriptions[0] ?? null
+  const historicalPrescriptions = prescriptions.slice(1)
 
   const graphPoints = useMemo(() => {
     const width = 620
@@ -533,6 +602,44 @@ export default function DashboardPage() {
     )
   }
 
+  if (dashboardLocked) {
+    return (
+      <div className={styles.shell}>
+        <header className={styles.header}>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Hej, {displayName}</h1>
+            <p className={styles.lead}>
+              Dit dashboard er låst, indtil du vælger et abonnement. Du kan stadig booke én gratis konsultation.
+            </p>
+          </div>
+        </header>
+
+        <section className={styles.content}>
+          <div className={styles.quickGrid}>
+            <button type="button" className={styles.quickCard} onClick={() => router.push('/professionals')}>
+              <div className={styles.quickEmoji} aria-hidden="true">
+                📅
+              </div>
+              <div className={styles.quickTitle}>Book gratis konsultation</div>
+              <div className={styles.quickMeta}>Du kan booke én aktiv tid uden abonnement</div>
+            </button>
+            <button
+              type="button"
+              className={styles.quickCard}
+              onClick={() => router.push('/userdashboard/subscription')}
+            >
+              <div className={styles.quickEmoji} aria-hidden="true">
+                💳
+              </div>
+              <div className={styles.quickTitle}>Vælg abonnement</div>
+              <div className={styles.quickMeta}>Lås hele dashboardet op</div>
+            </button>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
@@ -541,6 +648,23 @@ export default function DashboardPage() {
           <p className={styles.lead}>Velkommen tilbage. Sådan går det med din rejse.</p>
           <button type="button" className={styles.profileBtn} onClick={() => router.push('/userdashboard/profile')}>
             Ret din profil
+          </button>
+          <button type="button" className={styles.profileBtn} onClick={() => router.push('/messages')}>
+            Kontakt Hormoni
+          </button>
+          <button type="button" className={styles.logoutBtn} onClick={signOutUser}>
+            Log ud
+          </button>
+          <button
+            type="button"
+            className={styles.deleteProfileBtn}
+            onClick={() => {
+              setDeleteError(null)
+              setDeleteConfirmText('')
+              setDeleteDialogOpen(true)
+            }}
+          >
+            Slet min profil
           </button>
         </div>
         {shouldShowUpgradeCard ? (
@@ -784,6 +908,65 @@ export default function DashboardPage() {
               <h2 className={styles.treatmentTitle}>Din behandlingsplan</h2>
               {prescriptionsError && <div className={styles.errorBanner}>Fejl: {prescriptionsError}</div>}
               <div className={styles.steps}>
+                {!latestPrescription ? (
+                  <div className={styles.step}>
+                    <div>
+                      <div className={styles.stepTitle}>Ingen ordineret medicin endnu</div>
+                      <div className={styles.stepSub}>Når gynækologen ordinerer medicin, vises den her.</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className={styles.step}>
+                    <div>
+                      <div className={styles.stepTitle}>{latestPrescription.medication_name}</div>
+                      <div className={styles.stepSub}>
+                        Dosis:{' '}
+                        {latestPrescription.dosage === null || latestPrescription.dosage === undefined
+                          ? 'Ikke angivet'
+                          : String(latestPrescription.dosage).trim() || 'Ikke angivet'}
+                      </div>
+                      <div className={styles.stepSub}>
+                        Instruks: {latestPrescription.instructions?.trim() || 'Ingen instruks angivet.'}
+                      </div>
+                      <div className={styles.stepSub}>
+                        Ordineret: {new Date(latestPrescription.issued_at).toLocaleDateString('da-DK')}
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.historyToggleBtn}
+                        onClick={() => setShowPrescriptionHistory((open) => !open)}
+                      >
+                        {showPrescriptionHistory
+                          ? 'Skjul medicinhistorik'
+                          : `Se medicinhistorik (${historicalPrescriptions.length})`}
+                      </button>
+                      {showPrescriptionHistory ? (
+                        historicalPrescriptions.length > 0 ? (
+                          <div className={styles.historyList}>
+                            {historicalPrescriptions.map((prescription) => (
+                              <div key={prescription.id} className={styles.historyItem}>
+                                <div className={styles.stepTitle}>{prescription.medication_name}</div>
+                                <div className={styles.stepSub}>
+                                  Dosis: {prescription.dosage?.trim() || 'Ikke angivet'}
+                                </div>
+                                <div className={styles.stepSub}>
+                                  Instruks: {prescription.instructions?.trim() || 'Ingen instruks angivet.'}
+                                </div>
+                                <div className={styles.stepSub}>
+                                  Ordineret: {new Date(prescription.issued_at).toLocaleDateString('da-DK')}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className={styles.stepSub}>Ingen tidligere ordinationer endnu.</div>
+                        )
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className={styles.steps}>
                 {treatmentSteps.map((step) => {
                   const stepClass =
                     step.state === 'completed'
@@ -984,6 +1167,69 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {deleteDialogOpen ? (
+        <div className={styles.dialogBackdrop} role="presentation" onClick={() => setDeleteDialogOpen(false)}>
+          <div
+            className={styles.dialogPanel}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-profile-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={styles.dialogHeader}>
+              <h2 id="delete-profile-title" className={styles.dialogTitle}>
+                Er du sikker på at du vil slette din profil?
+              </h2>
+              <button
+                type="button"
+                className={styles.dialogClose}
+                aria-label="Luk"
+                onClick={() => setDeleteDialogOpen(false)}
+                disabled={deleteBusy}
+              >
+                ×
+              </button>
+            </div>
+            <div className={styles.dialogBody}>
+              <p className={styles.dialogValueMuted}>
+                Dette sletter alle personlige oplysninger (mail, telefon, navn, noter osv.). Udvalgte behandlings- og
+                symptomdata bevares kun anonymiseret til analyse.
+              </p>
+              <label className={styles.dialogRow}>
+                <span className={styles.dialogLabel}>Skriv for at bekræfte</span>
+                <input
+                  className={styles.deleteConfirmInput}
+                  value={deleteConfirmText}
+                  onChange={(event) => setDeleteConfirmText(event.target.value)}
+                  placeholder='SLET MIN PROFIL'
+                  autoComplete="off"
+                  disabled={deleteBusy}
+                />
+              </label>
+              {deleteError ? <div className={styles.errorBanner}>{deleteError}</div> : null}
+            </div>
+            <div className={styles.dialogFooter}>
+              <button
+                type="button"
+                className={styles.btnOutline}
+                onClick={() => setDeleteDialogOpen(false)}
+                disabled={deleteBusy}
+              >
+                Annuller
+              </button>
+              <button
+                type="button"
+                className={styles.deleteProfileBtn}
+                onClick={deleteMyProfile}
+                disabled={deleteBusy}
+              >
+                {deleteBusy ? 'Sletter profil...' : 'Slet min profil permanent'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

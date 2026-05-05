@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 
 const inputClass =
@@ -62,6 +62,7 @@ const TOTAL_STEPS = 3
 
 export default function OnboardingPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const [fullName, setFullName] = useState('')
   const [address, setAddress] = useState('')
@@ -72,6 +73,9 @@ export default function OnboardingPage() {
   const [selectedHealthConditions, setSelectedHealthConditions] = useState<string[]>([])
   const [medications, setMedications] = useState('')
   const [additionalNotes, setAdditionalNotes] = useState('')
+  const [acceptedTerms, setAcceptedTerms] = useState(false)
+  const [allowNewsEmails, setAllowNewsEmails] = useState(false)
+  const [allowAppointmentReminders, setAllowAppointmentReminders] = useState(false)
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [availablePlans, setAvailablePlans] = useState<PlanRow[]>([])
   const [plansLoaded, setPlansLoaded] = useState(false)
@@ -79,6 +83,8 @@ export default function OnboardingPage() {
 
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [cprChecking, setCprChecking] = useState(false)
+  const [cprError, setCprError] = useState<string | null>(null)
 
   const normalizeEmail = (value: string) => value.trim()
 
@@ -105,10 +111,10 @@ export default function OnboardingPage() {
   const fullNameIsValid = useMemo(() => fullName.trim().length > 1, [fullName])
   const addressIsValid = useMemo(() => address.trim().length > 3, [address])
 
-  const stepOneIsValid = fullNameIsValid && addressIsValid && emailIsValid && phoneIsValid && cprIsValid
+  const stepOneIsValid =
+    fullNameIsValid && addressIsValid && emailIsValid && phoneIsValid && cprIsValid && acceptedTerms
   const planIds = useMemo(() => new Set(availablePlans.map((p) => p.id)), [availablePlans])
-  const planStepIsValid =
-    plansLoaded && availablePlans.length > 0 && planIds.has(selectedPlanId)
+  const planStepIsValid = plansLoaded && planIds.has(selectedPlanId)
   const formIsValid = stepOneIsValid && planStepIsValid
 
   useEffect(() => {
@@ -124,6 +130,9 @@ export default function OnboardingPage() {
     medications,
     additionalNotes,
     selectedPlanId,
+    acceptedTerms,
+    allowNewsEmails,
+    allowAppointmentReminders,
   ])
 
   const toggleItem = (current: string[], value: string, setter: (next: string[]) => void) => {
@@ -133,6 +142,64 @@ export default function OnboardingPage() {
     }
 
     setter([...current, value])
+  }
+
+  const validateCprOnStepOne = async () => {
+    const normalizedCpr = normalizeCpr(cprNumber)
+    if (!/^\d{10}$/.test(normalizedCpr)) return false
+
+    setCprChecking(true)
+    setCprError(null)
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const accessToken = session?.access_token
+      if (!accessToken) {
+        setCprError('Session udløbet. Log ind igen for at fortsætte.')
+        return false
+      }
+
+      const cprHash = await toSha256Hex(normalizedCpr)
+      const cprRes = await fetch(`${window.location.origin}/api/user-cpr-vault`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          cpr_ciphertext: normalizedCpr,
+          cpr_hash: cprHash,
+        }),
+      })
+      const cprJson = (await cprRes.json().catch(() => ({}))) as { error?: string }
+      if (!cprRes.ok) {
+        setCprError(cprJson.error ?? 'Kunne ikke validere CPR. Prøv igen.')
+        return false
+      }
+      return true
+    } finally {
+      setCprChecking(false)
+    }
+  }
+
+  const handleStepOneNext = async () => {
+    if (!stepOneIsValid || cprChecking) return
+    const ok = await validateCprOnStepOne()
+    if (!ok) return
+    setStep(2)
+  }
+
+  const goToPreviousStep = () => {
+    if (step === 3) {
+      setStep(2)
+      return
+    }
+    if (step === 2) {
+      setStep(1)
+      return
+    }
+    router.back()
   }
 
   const save = async () => {
@@ -174,6 +241,7 @@ export default function OnboardingPage() {
       health_conditions: selectedHealthConditions,
       medications: medications.trim() || null,
       additional_notes: additionalNotes.trim() || null,
+      subscription_tier: selectedPlanId,
       profile_completed: true,
       profile_completed_at: new Date().toISOString(),
     }
@@ -212,7 +280,11 @@ export default function OnboardingPage() {
       return
     }
 
-    router.push('/dashboard')
+    if (selectedPlanId === 'pro') {
+      router.push('/userdashboard/subscription?setup=1&next=%2Fdashboard%2Fpro')
+      return
+    }
+    router.push('/dashboard/free')
   }
 
   useEffect(() => {
@@ -254,7 +326,7 @@ export default function OnboardingPage() {
         console.error(plansError)
       }
 
-      const plans = (planRows ?? []) as PlanRow[]
+      const plans = ((planRows ?? []) as PlanRow[]).filter((plan) => plan.id === 'free' || plan.id === 'pro')
       setAvailablePlans(plans)
       const ids = new Set(plans.map((p) => p.id))
 
@@ -268,8 +340,8 @@ export default function OnboardingPage() {
       const resolved = ids.has(legacyMapped)
         ? legacyMapped
         : ids.has('free')
-          ? 'free'
-          : plans[0]?.id ?? 'free'
+            ? 'free'
+            : plans[0]?.id ?? 'free'
       setSelectedPlanId(resolved)
       setPlansLoaded(true)
     }
@@ -280,8 +352,36 @@ export default function OnboardingPage() {
     }
   }, [])
 
+  useEffect(() => {
+    const stepParam = searchParams.get('step')
+    if (stepParam === '1' || stepParam === '2' || stepParam === '3') {
+      setStep(Number(stepParam) as 1 | 2 | 3)
+    }
+  }, [searchParams])
+
   return (
     <main className="mx-auto max-w-2xl px-4 py-8 md:py-12">
+      <nav className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-black/5 bg-white/80 p-2">
+        <Link
+          href="/"
+          className="rounded-full px-4 py-2 text-sm font-medium text-[#4a4a4a] transition hover:bg-[#f8faf9] hover:text-[#333333]"
+        >
+          Forside
+        </Link>
+        <Link
+          href="/professionals"
+          className="rounded-full px-4 py-2 text-sm font-medium text-[#4a4a4a] transition hover:bg-[#f8faf9] hover:text-[#333333]"
+        >
+          Gynækologer
+        </Link>
+        <Link
+          href="/login"
+          className="rounded-full px-4 py-2 text-sm font-medium text-[#4a4a4a] transition hover:bg-[#f8faf9] hover:text-[#333333]"
+        >
+          Log ind
+        </Link>
+      </nav>
+
       <header className="mb-8 border-b border-black/5 pb-6">
         <Link href="/" className="text-lg font-semibold tracking-tight text-[#333333] transition hover:text-[#849b87]">
           Hormoni(e)
@@ -393,13 +493,51 @@ export default function OnboardingPage() {
                 className={inputClass}
                 placeholder="10 cifre"
                 value={cprNumber}
-                onChange={(e) => setCprNumber(e.target.value)}
+                onChange={(e) => {
+                  setCprNumber(e.target.value)
+                  setCprError(null)
+                }}
                 inputMode="numeric"
                 autoComplete="off"
               />
               {!cprIsValid && cprNumber.trim().length > 0 && (
                 <p className="mt-1.5 text-sm text-red-600">CPR-nummer skal være præcis 10 cifre.</p>
               )}
+              {cprError ? <p className="mt-1.5 text-sm text-red-600">{cprError}</p> : null}
+            </div>
+
+            <div className="space-y-2 rounded-xl border border-black/10 bg-[#fafafa] p-4">
+              <label className="flex items-start gap-3 text-sm text-[#333333]">
+                <input
+                  type="checkbox"
+                  checked={acceptedTerms}
+                  onChange={(e) => setAcceptedTerms(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-black/20 text-[#849b87] focus:ring-[#849b87]/30"
+                />
+                <span>
+                  Jeg accepterer Terms and Conditions <span className="text-red-600">*</span>
+                </span>
+              </label>
+
+              <label className="flex items-start gap-3 text-sm text-[#333333]">
+                <input
+                  type="checkbox"
+                  checked={allowNewsEmails}
+                  onChange={(e) => setAllowNewsEmails(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-black/20 text-[#849b87] focus:ring-[#849b87]/30"
+                />
+                <span>Må vi sende dig nyhedsmails?</span>
+              </label>
+
+              <label className="flex items-start gap-3 text-sm text-[#333333]">
+                <input
+                  type="checkbox"
+                  checked={allowAppointmentReminders}
+                  onChange={(e) => setAllowAppointmentReminders(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-black/20 text-[#849b87] focus:ring-[#849b87]/30"
+                />
+                <span>Må vi sende dig påmindelser om din tid?</span>
+              </label>
             </div>
           </div>
         )}
@@ -538,25 +676,18 @@ export default function OnboardingPage() {
         )}
 
         <div className="flex flex-wrap items-center gap-3 pt-2">
-          {step === 2 && (
-            <button onClick={() => setStep(1)} className={ghostBtn} type="button">
-              Tilbage
-            </button>
-          )}
-          {step === 3 && (
-            <button onClick={() => setStep(2)} className={ghostBtn} type="button">
-              Tilbage
-            </button>
-          )}
+          <button onClick={goToPreviousStep} className={ghostBtn} type="button">
+            Tilbage
+          </button>
 
           {step === 1 ? (
             <button
-              onClick={() => setStep(2)}
-              disabled={!stepOneIsValid}
+              onClick={handleStepOneNext}
+              disabled={!stepOneIsValid || cprChecking}
               className={sageBtn}
               type="button"
             >
-              Næste
+              {cprChecking ? 'Kontrollerer CPR…' : 'Næste'}
             </button>
           ) : step === 2 ? (
             <button onClick={() => setStep(3)} className={sageBtn} type="button">

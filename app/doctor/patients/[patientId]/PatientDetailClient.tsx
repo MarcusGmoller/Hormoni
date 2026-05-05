@@ -186,6 +186,62 @@ export default function PatientDetailClient() {
 
   const allLogIds = healthLogs.map((l) => l.id)
   const allExpanded = allLogIds.length > 0 && allLogIds.every((id) => openHealthLogIds[id])
+  const graphLogs = useMemo(() => {
+    return [...healthLogs]
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+      .slice(-7)
+  }, [healthLogs])
+  const graphPoints = useMemo(() => {
+    const width = 620
+    const height = 220
+    const padLeft = 36
+    const padRight = 16
+    const padTop = 14
+    const padBottom = 28
+    const plotWidth = width - padLeft - padRight
+    const plotHeight = height - padTop - padBottom
+    const xStep = graphLogs.length > 1 ? plotWidth / (graphLogs.length - 1) : 0
+    const toY = (value: number) => padTop + ((10 - value) / 10) * plotHeight
+
+    const series = [
+      { key: 'hedeture', label: 'Hedeture', color: '#D1826A' },
+      { key: 'soevnkvalitet', label: 'Søvn', color: '#6C8F7D' },
+      { key: 'energiniveau', label: 'Energi', color: '#95B0A0' },
+    ] as const
+
+    const pointsBySeries = series.map((serie) => {
+      const points = graphLogs.map((log, index) => {
+        const value = Number(log.symptom_scores?.[serie.key] ?? 0)
+        return {
+          x: padLeft + xStep * index,
+          y: toY(value),
+          value,
+        }
+      })
+      return {
+        ...serie,
+        points,
+        path: points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x},${point.y}`).join(' '),
+      }
+    })
+
+    const ticks = [0, 2, 4, 6, 8, 10]
+    return {
+      width,
+      height,
+      padLeft,
+      padRight,
+      padTop,
+      padBottom,
+      plotWidth,
+      plotHeight,
+      ticks,
+      pointsBySeries,
+      labels: graphLogs.map((log) =>
+        new Date(log.created_at).toLocaleDateString('da-DK', { month: 'short', day: '2-digit' })
+      ),
+    }
+  }, [graphLogs])
 
   const toggleAllLogs = () => {
     if (allExpanded) {
@@ -309,6 +365,69 @@ export default function PatientDetailClient() {
           <p className={styles.empty}>Ingen logposter.</p>
         ) : (
           <div className={styles.list}>
+            {graphLogs.length >= 2 ? (
+              <div className={styles.graphCard}>
+                <div className={styles.graphWrap}>
+                  <svg viewBox={`0 0 ${graphPoints.width} ${graphPoints.height}`} width="100%" height="auto">
+                    {graphPoints.ticks.map((tick) => {
+                      const y = graphPoints.padTop + ((10 - tick) / 10) * graphPoints.plotHeight
+                      return (
+                        <g key={tick}>
+                          <line
+                            x1={graphPoints.padLeft}
+                            y1={y}
+                            x2={graphPoints.width - graphPoints.padRight}
+                            y2={y}
+                            stroke="#E5E7EB"
+                            strokeDasharray="2 3"
+                          />
+                          <text x={8} y={y + 4} fill="#6B7280" fontSize="10">
+                            {tick}
+                          </text>
+                        </g>
+                      )
+                    })}
+
+                    {graphPoints.labels.map((label, index) => {
+                      const x =
+                        graphPoints.padLeft +
+                        (graphPoints.labels.length > 1
+                          ? (graphPoints.plotWidth / (graphPoints.labels.length - 1)) * index
+                          : 0)
+                      return (
+                        <text
+                          key={`${label}-${index}`}
+                          x={x}
+                          y={graphPoints.height - 8}
+                          fill="#6B7280"
+                          fontSize="10"
+                          textAnchor="middle"
+                        >
+                          {label}
+                        </text>
+                      )
+                    })}
+
+                    {graphPoints.pointsBySeries.map((serie) => (
+                      <g key={serie.key}>
+                        <path d={serie.path} fill="none" stroke={serie.color} strokeWidth="2.25" />
+                        {serie.points.map((point, index) => (
+                          <circle key={`${serie.key}-${index}`} cx={point.x} cy={point.y} r="3.5" fill={serie.color} />
+                        ))}
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+                <div className={styles.legendRow}>
+                  {graphPoints.pointsBySeries.map((serie) => (
+                    <div key={serie.key}>
+                      <span className={styles.legendDot} style={{ backgroundColor: serie.color }} />
+                      <span>{serie.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {healthLogs.map((log) => {
               const open = !!openHealthLogIds[log.id]
               const avg = averageSymptomScore(log.symptom_scores)

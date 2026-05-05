@@ -44,7 +44,7 @@ type CprVaultRow = {
   cpr_ciphertext: string | null
 }
 
-type NavView = 'patients' | 'messages' | 'calendar' | 'reporting' | 'stats' | 'settings'
+type NavView = 'patients' | 'messages' | 'calendar' | 'stats' | 'settings'
 
 type PatientRow = {
   id: string
@@ -60,27 +60,13 @@ type PatientRow = {
   nextTimestampMs: number | null
 }
 
-type ActivityRow = {
-  id: string
-  patient_id: string
-  activity: 'message_reply' | 'meeting_held'
-  minutes: number
-  created_at: string
-}
-
-type ActivityHistoryGroup = {
-  key: string
-  patientId: string
-  date: string
-  messageMinutes: number
-  videoMinutes: number
-  messageId: string | null
-  videoId: string | null
-}
-
 type ProfessionalSettings = {
   user_id: string
   bio: string | null
+  professional_name: string | null
+  professional_email: string | null
+  professional_phone: string | null
+  payment_information: string | null
 }
 
 type OpenSlot = {
@@ -111,13 +97,6 @@ type CalendarContextMenuState = {
   date: string
   start: string
   end: string
-}
-
-type SettingsProfile = {
-  id: string
-  full_name: string | null
-  email: string | null
-  contact_email: string | null
 }
 
 const toTimeValue = (value: string) => {
@@ -191,7 +170,6 @@ export default function DoctorPageClient() {
     viewParam === 'patients' ||
     viewParam === 'messages' ||
     viewParam === 'calendar' ||
-    viewParam === 'reporting' ||
     viewParam === 'stats' ||
     viewParam === 'settings'
       ? viewParam
@@ -223,17 +201,6 @@ export default function DoctorPageClient() {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
-  const [reportPatientId, setReportPatientId] = useState('')
-  const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10))
-  const [reportMessageMinutes, setReportMessageMinutes] = useState('')
-  const [reportVideoMinutes, setReportVideoMinutes] = useState('')
-  const [reportSubmitting, setReportSubmitting] = useState(false)
-  const [reportFeedback, setReportFeedback] = useState<string | null>(null)
-  const [reportedActivities, setReportedActivities] = useState<ActivityRow[]>([])
-  const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyEditingKey, setHistoryEditingKey] = useState<string | null>(null)
-  const [historyEditMessageMinutes, setHistoryEditMessageMinutes] = useState('')
-  const [historyEditVideoMinutes, setHistoryEditVideoMinutes] = useState('')
   const [professionalSettings, setProfessionalSettings] = useState<ProfessionalSettings | null>(null)
   const [bioDraft, setBioDraft] = useState('')
   const [settingsSaving, setSettingsSaving] = useState(false)
@@ -250,7 +217,6 @@ export default function DoctorPageClient() {
   const [editSlotDate, setEditSlotDate] = useState('')
   const [editSlotStart, setEditSlotStart] = useState('')
   const [editSlotEnd, setEditSlotEnd] = useState('')
-  const [settingsProfile, setSettingsProfile] = useState<SettingsProfile | null>(null)
   const [nameDraft, setNameDraft] = useState('')
   const [emailDraft, setEmailDraft] = useState('')
   const [selectedCalendarAppointment, setSelectedCalendarAppointment] = useState<CalendarAppointmentDetails | null>(null)
@@ -281,21 +247,24 @@ export default function DoctorPageClient() {
       }
       setDoctorId(user.id)
 
-      const { data: profileRows, error: profileError } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .limit(1)
-      const profile = profileRows?.[0]
+      const { data: professionalRow, error: professionalError } = await supabase
+        .from('professionals')
+        .select('approval_status')
+        .eq('user_id', user.id)
+        .maybeSingle()
 
-      if (profileError) {
+      if (professionalError) {
         setLoading(false)
-        setError(profileError.message)
+        setError(professionalError.message)
         return
       }
 
-      if (profile?.role !== 'professional') {
+      if (!professionalRow) {
         router.push('/userdashboard')
+        return
+      }
+      if (professionalRow.approval_status !== 'approved') {
+        router.push('/gynaekolog-pending')
         return
       }
 
@@ -442,13 +411,6 @@ export default function DoctorPageClient() {
         }
       }
 
-      const { data: activityRows } = await supabase
-        .from('professional_activity')
-        .select('id,patient_id,activity,minutes,created_at')
-        .eq('professional_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(500)
-      setReportedActivities((activityRows ?? []) as ActivityRow[])
       await loadOpenSlots(user.id)
 
       setLoading(false)
@@ -616,61 +578,18 @@ export default function DoctorPageClient() {
       .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
   }, [appointments])
 
-  const reportPatientOptions = useMemo(() => {
-    return patients.map((patient) => ({ id: patient.id, name: patient.name }))
-  }, [patients])
-
-  useEffect(() => {
-    if (reportPatientId) return
-    if (reportPatientOptions.length === 0) return
-    setReportPatientId(reportPatientOptions[0].id)
-  }, [reportPatientId, reportPatientOptions])
-
-  const loadReportedActivities = async (professionalId: string) => {
-    setHistoryLoading(true)
-    const { data, error: activityError } = await supabase
-      .from('professional_activity')
-      .select('id,patient_id,activity,minutes,created_at')
-      .eq('professional_id', professionalId)
-      .order('created_at', { ascending: false })
-      .limit(200)
-
-    if (activityError) {
-      setReportFeedback(`Kunne ikke hente historik: ${activityError.message}`)
-      setReportedActivities([])
-    } else {
-      setReportedActivities((data ?? []) as ActivityRow[])
-    }
-    setHistoryLoading(false)
-  }
-
-  useEffect(() => {
-    if (!doctorId) return
-    if (currentView !== 'reporting') return
-    loadReportedActivities(doctorId)
-  }, [doctorId, currentView])
-
   const loadSettingsData = async (professionalId: string) => {
-    const [{ data: professionalRows }, { data: profileRows }] = await Promise.all([
-      supabase
-        .from('professionals')
-        .select('user_id,bio')
-        .eq('user_id', professionalId)
-        .limit(1),
-      supabase
-        .from('profiles')
-        .select('id,full_name,email,contact_email')
-        .eq('id', professionalId)
-        .limit(1),
-    ])
+    const { data: professionalRows } = await supabase
+      .from('professionals')
+      .select('user_id,bio,professional_name,professional_email,professional_phone,payment_information')
+      .eq('user_id', professionalId)
+      .limit(1)
 
     const settingsRow = (professionalRows?.[0] ?? null) as ProfessionalSettings | null
     setProfessionalSettings(settingsRow)
     setBioDraft(settingsRow?.bio ?? '')
-    const profileRow = (profileRows?.[0] ?? null) as SettingsProfile | null
-    setSettingsProfile(profileRow)
-    setNameDraft(profileRow?.full_name ?? '')
-    setEmailDraft(profileRow?.contact_email ?? profileRow?.email ?? '')
+    setNameDraft(settingsRow?.professional_name ?? '')
+    setEmailDraft(settingsRow?.professional_email ?? '')
   }
 
   const loadOpenSlots = async (professionalId: string) => {
@@ -862,73 +781,36 @@ export default function DoctorPageClient() {
     return { from, to }
   }, [statsMonth])
 
-  const activitiesInStatsMonth = useMemo(() => {
-    return reportedActivities.filter((activity) => {
-      const t = new Date(activity.created_at).getTime()
-      return t >= statsRange.from.getTime() && t < statsRange.to.getTime()
+  const payoutPerConsultation = 400
+
+  const heldConsultationsInStatsMonth = useMemo(() => {
+    const nowMs = Date.now()
+    return appointments.filter((appointment) => {
+      if (appointment.status !== 'confirmed') return false
+      const t = new Date(appointment.start_time).getTime()
+      return t <= nowMs && t >= statsRange.from.getTime() && t < statsRange.to.getTime()
     })
-  }, [reportedActivities, statsRange])
-
-  const consultationRatePerHour = 1200
-  const messageRatePerHour = 800
-
-  const consultationMinutesTotal = useMemo(() => {
-    return activitiesInStatsMonth.reduce((sum, activity) => {
-      if (activity.activity !== 'meeting_held') return sum
-      return sum + activity.minutes
-    }, 0)
-  }, [activitiesInStatsMonth])
-
-  const messageMinutesTotal = useMemo(() => {
-    return activitiesInStatsMonth.reduce((sum, activity) => {
-      if (activity.activity !== 'message_reply') return sum
-      return sum + activity.minutes
-    }, 0)
-  }, [activitiesInStatsMonth])
-
-  const totalHours = (consultationMinutesTotal + messageMinutesTotal) / 60
-  const estimatedHonorar =
-    (consultationMinutesTotal / 60) * consultationRatePerHour + (messageMinutesTotal / 60) * messageRatePerHour
+  }, [appointments, statsRange])
 
   const consultationsByPatient = useMemo(() => {
-    const grouped = activitiesInStatsMonth.reduce<
-      Record<string, { patientId: string; count: number; minutes: number; latest: string }>
-    >((acc, activity) => {
-      if (activity.activity !== 'meeting_held') return acc
-      const key = activity.patient_id
+    const grouped = heldConsultationsInStatsMonth.reduce<
+      Record<string, { patientId: string; count: number; latest: string }>
+    >((acc, appointment) => {
+      const key = appointment.user_id
       if (!acc[key]) {
-        acc[key] = { patientId: key, count: 0, minutes: 0, latest: activity.created_at }
+        acc[key] = { patientId: key, count: 0, latest: appointment.start_time }
       }
       acc[key].count += 1
-      acc[key].minutes += activity.minutes
-      if (new Date(activity.created_at).getTime() > new Date(acc[key].latest).getTime()) {
-        acc[key].latest = activity.created_at
+      if (new Date(appointment.start_time).getTime() > new Date(acc[key].latest).getTime()) {
+        acc[key].latest = appointment.start_time
       }
       return acc
     }, {})
 
-    return Object.values(grouped).sort((a, b) => b.minutes - a.minutes)
-  }, [activitiesInStatsMonth])
+    return Object.values(grouped).sort((a, b) => b.count - a.count)
+  }, [heldConsultationsInStatsMonth])
 
-  const messagesByPatient = useMemo(() => {
-    const grouped = activitiesInStatsMonth.reduce<
-      Record<string, { patientId: string; count: number; minutes: number; latest: string }>
-    >((acc, activity) => {
-      if (activity.activity !== 'message_reply') return acc
-      const patientId = activity.patient_id
-      if (!acc[patientId]) {
-        acc[patientId] = { patientId, count: 0, minutes: 0, latest: activity.created_at }
-      }
-      acc[patientId].count += 1
-      acc[patientId].minutes += activity.minutes
-      if (new Date(activity.created_at).getTime() > new Date(acc[patientId].latest).getTime()) {
-        acc[patientId].latest = activity.created_at
-      }
-      return acc
-    }, {})
-
-    return Object.values(grouped).sort((a, b) => b.minutes - a.minutes)
-  }, [activitiesInStatsMonth])
+  const estimatedHonorar = heldConsultationsInStatsMonth.length * payoutPerConsultation
 
   const selectedConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedConversationId) ?? null,
@@ -1076,226 +958,6 @@ export default function DoctorPageClient() {
     setAcceptingAppointmentId(null)
   }
 
-  const submitTimeReport = async () => {
-    if (!doctorId) return
-    if (!reportPatientId) {
-      setReportFeedback('Vælg en patient.')
-      return
-    }
-
-    const messageMinutes = Number(reportMessageMinutes || 0)
-    const videoMinutes = Number(reportVideoMinutes || 0)
-    if (messageMinutes <= 0 && videoMinutes <= 0) {
-      setReportFeedback('Indtast minutter for mindst én aktivitet.')
-      return
-    }
-
-    const reportRows: Array<{
-      professional_id: string
-      patient_id: string
-      activity: 'message_reply' | 'meeting_held'
-      minutes: number
-      created_at: string
-    }> = []
-
-    const baseTimestamp = new Date(`${reportDate}T12:00:00`).toISOString()
-    if (messageMinutes > 0) {
-      reportRows.push({
-        professional_id: doctorId,
-        patient_id: reportPatientId,
-        activity: 'message_reply',
-        minutes: messageMinutes,
-        created_at: baseTimestamp,
-      })
-    }
-    if (videoMinutes > 0) {
-      reportRows.push({
-        professional_id: doctorId,
-        patient_id: reportPatientId,
-        activity: 'meeting_held',
-        minutes: videoMinutes,
-        created_at: baseTimestamp,
-      })
-    }
-
-    setReportSubmitting(true)
-    setReportFeedback(null)
-    const { error: insertError } = await supabase
-      .from('professional_activity')
-      .insert(reportRows)
-
-    setReportSubmitting(false)
-    if (insertError) {
-      setReportFeedback(`Kunne ikke indberette tid: ${insertError.message}`)
-      return
-    }
-
-    setReportMessageMinutes('')
-    setReportVideoMinutes('')
-    setReportFeedback('Tid er indberettet.')
-    await loadReportedActivities(doctorId)
-  }
-
-  const groupedActivityHistory = useMemo<ActivityHistoryGroup[]>(() => {
-    const grouped = reportedActivities.reduce<Record<string, ActivityHistoryGroup>>((acc, row) => {
-      const date = new Date(row.created_at).toISOString().slice(0, 10)
-      const key = `${row.patient_id}__${date}`
-      if (!acc[key]) {
-        acc[key] = {
-          key,
-          patientId: row.patient_id,
-          date,
-          messageMinutes: 0,
-          videoMinutes: 0,
-          messageId: null,
-          videoId: null,
-        }
-      }
-      if (row.activity === 'message_reply') {
-        acc[key].messageMinutes += row.minutes
-        acc[key].messageId = row.id
-      }
-      if (row.activity === 'meeting_held') {
-        acc[key].videoMinutes += row.minutes
-        acc[key].videoId = row.id
-      }
-      return acc
-    }, {})
-
-    return Object.values(grouped).sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-    )
-  }, [reportedActivities])
-
-  const startEditHistoryRow = (row: ActivityHistoryGroup) => {
-    setHistoryEditingKey(row.key)
-    setHistoryEditMessageMinutes(String(row.messageMinutes))
-    setHistoryEditVideoMinutes(String(row.videoMinutes))
-    setReportFeedback(null)
-  }
-
-  const cancelEditHistoryRow = () => {
-    setHistoryEditingKey(null)
-    setHistoryEditMessageMinutes('')
-    setHistoryEditVideoMinutes('')
-  }
-
-  const saveHistoryRow = async (row: ActivityHistoryGroup) => {
-    if (!doctorId) return
-    const messageMinutes = Math.max(0, Number(historyEditMessageMinutes || 0))
-    const videoMinutes = Math.max(0, Number(historyEditVideoMinutes || 0))
-    const createdAt = new Date(`${row.date}T12:00:00`).toISOString()
-
-    setReportSubmitting(true)
-    setReportFeedback(null)
-
-    if (row.messageId) {
-      if (messageMinutes > 0) {
-        const { error: updateError } = await supabase
-          .from('professional_activity')
-          .update({ minutes: messageMinutes })
-          .eq('id', row.messageId)
-        if (updateError) {
-          setReportSubmitting(false)
-          setReportFeedback(`Kunne ikke opdatere beskeder: ${updateError.message}`)
-          return
-        }
-      } else {
-        const { error: deleteError } = await supabase
-          .from('professional_activity')
-          .delete()
-          .eq('id', row.messageId)
-        if (deleteError) {
-          setReportSubmitting(false)
-          setReportFeedback(`Kunne ikke slette beskedtid: ${deleteError.message}`)
-          return
-        }
-      }
-    } else if (messageMinutes > 0) {
-      const { error: insertError } = await supabase
-        .from('professional_activity')
-        .insert({
-          professional_id: doctorId,
-          patient_id: row.patientId,
-          activity: 'message_reply',
-          minutes: messageMinutes,
-          created_at: createdAt,
-        })
-      if (insertError) {
-        setReportSubmitting(false)
-        setReportFeedback(`Kunne ikke oprette beskedtid: ${insertError.message}`)
-        return
-      }
-    }
-
-    if (row.videoId) {
-      if (videoMinutes > 0) {
-        const { error: updateError } = await supabase
-          .from('professional_activity')
-          .update({ minutes: videoMinutes })
-          .eq('id', row.videoId)
-        if (updateError) {
-          setReportSubmitting(false)
-          setReportFeedback(`Kunne ikke opdatere videotid: ${updateError.message}`)
-          return
-        }
-      } else {
-        const { error: deleteError } = await supabase
-          .from('professional_activity')
-          .delete()
-          .eq('id', row.videoId)
-        if (deleteError) {
-          setReportSubmitting(false)
-          setReportFeedback(`Kunne ikke slette videotid: ${deleteError.message}`)
-          return
-        }
-      }
-    } else if (videoMinutes > 0) {
-      const { error: insertError } = await supabase
-        .from('professional_activity')
-        .insert({
-          professional_id: doctorId,
-          patient_id: row.patientId,
-          activity: 'meeting_held',
-          minutes: videoMinutes,
-          created_at: createdAt,
-        })
-      if (insertError) {
-        setReportSubmitting(false)
-        setReportFeedback(`Kunne ikke oprette videotid: ${insertError.message}`)
-        return
-      }
-    }
-
-    setReportSubmitting(false)
-    setReportFeedback('Indberetning opdateret.')
-    setHistoryEditingKey(null)
-    setHistoryEditMessageMinutes('')
-    setHistoryEditVideoMinutes('')
-    await loadReportedActivities(doctorId)
-  }
-
-  const deleteHistoryRow = async (row: ActivityHistoryGroup) => {
-    if (!doctorId) return
-    const ids = [row.messageId, row.videoId].filter((id): id is string => Boolean(id))
-    if (ids.length === 0) return
-
-    setReportSubmitting(true)
-    setReportFeedback(null)
-    const { error: deleteError } = await supabase
-      .from('professional_activity')
-      .delete()
-      .in('id', ids)
-    setReportSubmitting(false)
-
-    if (deleteError) {
-      setReportFeedback(`Kunne ikke slette indberetning: ${deleteError.message}`)
-      return
-    }
-    setReportFeedback('Indberetning slettet.')
-    await loadReportedActivities(doctorId)
-  }
-
   const saveProfessionalBio = async () => {
     if (!doctorId) return
     setSettingsSaving(true)
@@ -1338,13 +1000,12 @@ export default function DoctorPageClient() {
     setSettingsFeedback(null)
 
     const { error: profileError } = await supabase
-      .from('profiles')
+      .from('professionals')
       .update({
-        full_name: nextName,
-        email: nextEmail,
-        contact_email: nextEmail,
+        professional_name: nextName,
+        professional_email: nextEmail,
       })
-      .eq('id', doctorId)
+      .eq('user_id', doctorId)
 
     if (profileError) {
       setSettingsSaving(false)
@@ -1352,7 +1013,7 @@ export default function DoctorPageClient() {
       return
     }
 
-    if (settingsProfile?.email !== nextEmail) {
+    if (professionalSettings?.professional_email !== nextEmail) {
       const { error: authError } = await supabase.auth.updateUser({ email: nextEmail })
       if (authError) {
         setSettingsSaving(false)
@@ -1649,8 +1310,7 @@ export default function DoctorPageClient() {
               patients: 'Patienter',
               messages: 'Beskeder',
               calendar: 'Kalender',
-              reporting: 'Indberet tid',
-              stats: 'Aktivitetsrapport',
+              stats: 'Udbetaling',
               settings: 'Indstillinger',
             }[currentView]}
           </h1>
@@ -2387,159 +2047,6 @@ export default function DoctorPageClient() {
           </div>
         )}
 
-        {currentView === 'reporting' && (
-          <section className={styles.reportCard}>
-            <h3 className={styles.reportTitle}>Indberet tid</h3>
-            <p className={styles.reportMeta}>
-              Fordel arbejdstid på besvarede beskeder og videokonsultationer. Gemmes i DB.
-            </p>
-            <div className={styles.reportGrid}>
-              <label className={styles.reportField}>
-                <span>Patient</span>
-                <select
-                  className={styles.reportControl}
-                  value={reportPatientId}
-                  onChange={(e) => setReportPatientId(e.target.value)}
-                >
-                  <option value="">Vælg patient</option>
-                  {reportPatientOptions.map((option) => (
-                    <option key={option.id} value={option.id}>{option.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label className={styles.reportField}>
-                <span>Dato</span>
-                <input
-                  className={styles.reportControl}
-                  type="date"
-                  value={reportDate}
-                  onChange={(e) => setReportDate(e.target.value)}
-                />
-              </label>
-              <label className={styles.reportField}>
-                <span>Beskeder (min)</span>
-                <input
-                  className={styles.reportControl}
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={reportMessageMinutes}
-                  onChange={(e) => setReportMessageMinutes(e.target.value)}
-                  placeholder="fx 20"
-                />
-              </label>
-              <label className={styles.reportField}>
-                <span>Videokonsultation (min)</span>
-                <input
-                  className={styles.reportControl}
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={reportVideoMinutes}
-                  onChange={(e) => setReportVideoMinutes(e.target.value)}
-                  placeholder="fx 45"
-                />
-              </label>
-            </div>
-            <div className={styles.reportActions}>
-              <button
-                type="button"
-                className={styles.reportSubmitBtn}
-                onClick={submitTimeReport}
-                disabled={reportSubmitting}
-              >
-                {reportSubmitting ? 'Gemmer...' : 'Indberet tid'}
-              </button>
-              {reportFeedback && <span className={styles.reportFeedback}>{reportFeedback}</span>}
-            </div>
-
-            <div className={styles.reportHistory}>
-              <h4 className={styles.reportHistoryTitle}>Indberettet historik</h4>
-              {historyLoading ? (
-                <div className={styles.meta}>Loader historik...</div>
-              ) : groupedActivityHistory.length === 0 ? (
-                <div className={styles.meta}>Ingen indberetninger endnu.</div>
-              ) : (
-                <div className={styles.reportHistoryRows}>
-                  {groupedActivityHistory.map((row) => {
-                    const isEditing = historyEditingKey === row.key
-                    return (
-                      <div key={row.key} className={styles.reportHistoryRow}>
-                        <div className={styles.reportHistoryMeta}>
-                          <div className={styles.name}>{patientNamesById[row.patientId] ?? 'Patient'}</div>
-                          <div className={styles.meta}>{new Date(row.date).toLocaleDateString('da-DK')}</div>
-                        </div>
-                        <div className={styles.reportHistoryFields}>
-                          <label className={styles.reportFieldSmall}>
-                            <span>Beskeder (min)</span>
-                            <input
-                              className={styles.reportControlSmall}
-                              type="number"
-                              min="0"
-                              value={isEditing ? historyEditMessageMinutes : String(row.messageMinutes)}
-                              disabled={!isEditing}
-                              onChange={(e) => setHistoryEditMessageMinutes(e.target.value)}
-                            />
-                          </label>
-                          <label className={styles.reportFieldSmall}>
-                            <span>Videokonsultation (min)</span>
-                            <input
-                              className={styles.reportControlSmall}
-                              type="number"
-                              min="0"
-                              value={isEditing ? historyEditVideoMinutes : String(row.videoMinutes)}
-                              disabled={!isEditing}
-                              onChange={(e) => setHistoryEditVideoMinutes(e.target.value)}
-                            />
-                          </label>
-                        </div>
-                        <div className={styles.reportHistoryActions}>
-                          {isEditing ? (
-                            <>
-                              <button
-                                type="button"
-                                className={styles.reportRowBtn}
-                                onClick={() => saveHistoryRow(row)}
-                                disabled={reportSubmitting}
-                              >
-                                Gem
-                              </button>
-                              <button
-                                type="button"
-                                className={styles.reportRowBtnGhost}
-                                onClick={cancelEditHistoryRow}
-                                disabled={reportSubmitting}
-                              >
-                                Annuller
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              type="button"
-                              className={styles.reportRowBtn}
-                              onClick={() => startEditHistoryRow(row)}
-                            >
-                              Rediger
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className={styles.reportRowDeleteBtn}
-                            onClick={() => deleteHistoryRow(row)}
-                            disabled={reportSubmitting}
-                          >
-                            Slet
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          </section>
-        )}
-
         {currentView === 'stats' && (
           <div className={styles.statsShell}>
             <div className={styles.statsTopRow}>
@@ -2572,51 +2079,45 @@ export default function DoctorPageClient() {
 
             <div className={styles.statsCards}>
               <div className={styles.statsCard}>
-                <div className={styles.statsCardLabel}>Videokonsultationer</div>
+                <div className={styles.statsCardLabel}>Afholdte konsultationer</div>
                 <div className={styles.statsCardValue}>
-                  {activitiesInStatsMonth.filter((a) => a.activity === 'meeting_held').length}
+                  {heldConsultationsInStatsMonth.length}
                 </div>
-                <div className={styles.statsCardMeta}>
-                  {(consultationMinutesTotal / 60).toFixed(1)} timer total
-                </div>
+                <div className={styles.statsCardMeta}>Automatisk registreret fra kalender/bookinger</div>
               </div>
               <div className={styles.statsCard}>
-                <div className={styles.statsCardLabel}>Beskeder besvaret</div>
-                <div className={styles.statsCardValue}>
-                  {activitiesInStatsMonth.filter((a) => a.activity === 'message_reply').length}
-                </div>
-                <div className={styles.statsCardMeta}>
-                  {(messageMinutesTotal / 60).toFixed(1)} timer total
-                </div>
+                <div className={styles.statsCardLabel}>Sats pr. konsultation</div>
+                <div className={styles.statsCardValue}>{payoutPerConsultation.toLocaleString('da-DK')} kr</div>
+                <div className={styles.statsCardMeta}>Fast sats</div>
               </div>
               <div className={styles.statsCard}>
-                <div className={styles.statsCardLabel}>Total Tid</div>
-                <div className={styles.statsCardValue}>{totalHours.toFixed(1)}</div>
-                <div className={styles.statsCardMeta}>timer i måneden</div>
+                <div className={styles.statsCardLabel}>Måned</div>
+                <div className={styles.statsCardValue}>{statsMonthLabel}</div>
+                <div className={styles.statsCardMeta}>Aktiv afregningsperiode</div>
               </div>
               <div className={styles.statsCard}>
-                <div className={styles.statsCardLabel}>Estimeret Honorar</div>
+                <div className={styles.statsCardLabel}>Estimeret udbetaling</div>
                 <div className={styles.statsCardValue}>
                   {Math.round(estimatedHonorar).toLocaleString('da-DK')} kr
                 </div>
-                <div className={styles.statsCardMeta}>Baseret på takster</div>
+                <div className={styles.statsCardMeta}>Automatisk beregnet</div>
               </div>
             </div>
 
             <div className={styles.ratesCard}>
-              <div className={styles.ratesTitle}>Takster</div>
+              <div className={styles.ratesTitle}>Automatisk afregning</div>
               <div className={styles.ratesGrid}>
-                <div>Videokonsultation: {consultationRatePerHour} kr/time</div>
-                <div>Beskeder: {messageRatePerHour} kr/time</div>
+                <div>Udbetaling sker automatisk pr. afholdt konsultation.</div>
+                <div>Ingen manuel indberetning af tid er nødvendig.</div>
               </div>
             </div>
 
             <div className={styles.statsDetailGrid}>
               <section className={styles.statsDetailCard}>
-                <h3 className={styles.statsDetailTitle}>Videokonsultationer Detaljer</h3>
+                <h3 className={styles.statsDetailTitle}>Konsultationer pr. patient</h3>
                 <div className={styles.statsRows}>
                   {consultationsByPatient.length === 0 && (
-                    <div className={styles.meta}>Ingen videokonsultationer i denne måned.</div>
+                    <div className={styles.meta}>Ingen afholdte konsultationer i denne måned.</div>
                   )}
                   {consultationsByPatient.map((item) => (
                     <div key={item.patientId} className={styles.statsRow}>
@@ -2626,51 +2127,37 @@ export default function DoctorPageClient() {
                       </div>
                       <div className={styles.statsRowRight}>
                         <div className={styles.meta}>{new Date(item.latest).toLocaleDateString('da-DK')}</div>
-                        <div className={styles.statsMinutes}>{item.minutes} min</div>
+                        <div className={styles.statsMinutes}>
+                          {(item.count * payoutPerConsultation).toLocaleString('da-DK')} kr
+                        </div>
                       </div>
                     </div>
                   ))}
                 </div>
                 <div className={styles.statsFooter}>
                   <span>Total:</span>
-                  <span>{consultationMinutesTotal} min ({(consultationMinutesTotal / 60).toFixed(1)} timer)</span>
+                  <span>{heldConsultationsInStatsMonth.length} konsultation(er)</span>
                 </div>
                 <div className={styles.statsFooter}>
-                  <span>Honorar:</span>
+                  <span>Estimeret udbetaling:</span>
                   <span>
-                    {Math.round((consultationMinutesTotal / 60) * consultationRatePerHour).toLocaleString('da-DK')} kr
+                    {Math.round(estimatedHonorar).toLocaleString('da-DK')} kr
                   </span>
                 </div>
               </section>
 
               <section className={styles.statsDetailCard}>
-                <h3 className={styles.statsDetailTitle}>Beskeder Detaljer</h3>
+                <h3 className={styles.statsDetailTitle}>Afregningsregel</h3>
                 <div className={styles.statsRows}>
-                  {messagesByPatient.length === 0 && (
-                    <div className={styles.meta}>Ingen beskeder i denne måned.</div>
-                  )}
-                  {messagesByPatient.map((item) => (
-                    <div key={item.patientId} className={styles.statsRow}>
-                      <div>
-                        <div className={styles.name}>{patientNamesById[item.patientId] ?? 'Patient'}</div>
-                        <div className={styles.meta}>{item.count} besked(er)</div>
-                      </div>
-                      <div className={styles.statsRowRight}>
-                        <div className={styles.meta}>{new Date(item.latest).toLocaleDateString('da-DK')}</div>
-                        <div className={styles.statsMinutes}>{item.minutes} min</div>
-                      </div>
-                    </div>
-                  ))}
+                  <div className={styles.meta}>Hver bekræftet og afholdt konsultation tæller som 1 udbetalingsenhed.</div>
+                  <div className={styles.meta}>Sats pr. enhed: {payoutPerConsultation.toLocaleString('da-DK')} kr.</div>
+                  <div className={styles.meta}>
+                    Månedens enheder: {heldConsultationsInStatsMonth.length}.
+                  </div>
                 </div>
                 <div className={styles.statsFooter}>
-                  <span>Total:</span>
-                  <span>{messageMinutesTotal} min ({(messageMinutesTotal / 60).toFixed(1)} timer)</span>
-                </div>
-                <div className={styles.statsFooter}>
-                  <span>Honorar:</span>
-                  <span>
-                    {Math.round((messageMinutesTotal / 60) * messageRatePerHour).toLocaleString('da-DK')} kr
-                  </span>
+                  <span>Samlet:</span>
+                  <span>{Math.round(estimatedHonorar).toLocaleString('da-DK')} kr</span>
                 </div>
               </section>
             </div>
@@ -2917,7 +2404,7 @@ export default function DoctorPageClient() {
           </div>
         )}
 
-        {currentView !== 'patients' && currentView !== 'messages' && currentView !== 'calendar' && currentView !== 'reporting' && currentView !== 'stats' && currentView !== 'settings' && (
+        {currentView !== 'patients' && currentView !== 'messages' && currentView !== 'calendar' && currentView !== 'stats' && currentView !== 'settings' && (
           <div className={styles.meta}>Denne sektion er under opbygning.</div>
         )}
       </section>

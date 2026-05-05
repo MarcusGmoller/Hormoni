@@ -63,6 +63,12 @@ export async function POST(request: NextRequest) {
   )
 
   if (upsertError) {
+    if (upsertError.message.includes('user_cpr_vault_cpr_hash_key')) {
+      return NextResponse.json(
+        { error: 'Dette CPR-nummer er allerede knyttet til en anden konto.' },
+        { status: 400 }
+      )
+    }
     return NextResponse.json({ error: upsertError.message }, { status: 400 })
   }
 

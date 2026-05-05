@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import styles from './subscriptionPage.module.css'
 
@@ -14,11 +14,15 @@ const planBlurb: Record<string, string> = {
 
 export default function SubscriptionUpgradePage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const setupMode = searchParams.get('setup') === '1'
+  const nextPath = searchParams.get('next') || '/dashboard/pro'
   const [loading, setLoading] = useState(true)
   const [subscriptionPlanId, setSubscriptionPlanId] = useState<string>('free')
   const [availablePlans, setAvailablePlans] = useState<PlanRow[]>([])
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [paymentPlaceholderBusy, setPaymentPlaceholderBusy] = useState(false)
 
   useEffect(() => {
     const run = async () => {
@@ -38,6 +42,11 @@ export default function SubscriptionUpgradePage() {
           .single(),
         supabase.from('plans').select('id,name,description').order('id'),
       ])
+      const { data: professional } = await supabase
+        .from('professionals')
+        .select('approval_status')
+        .eq('user_id', user.id)
+        .maybeSingle()
 
       if (error) {
         console.error(error)
@@ -49,8 +58,12 @@ export default function SubscriptionUpgradePage() {
         console.error(plansError)
       }
 
-      if (profile?.role === 'professional') {
+      if (professional?.approval_status === 'approved') {
         router.push('/gynaekolog-dashboard')
+        return
+      }
+      if (professional) {
+        router.push('/gynaekolog-pending')
         return
       }
 
@@ -59,7 +72,7 @@ export default function SubscriptionUpgradePage() {
         return
       }
 
-      const plans = (planRows ?? []) as PlanRow[]
+      const plans = ((planRows ?? []) as PlanRow[]).filter((plan) => plan.id === 'free' || plan.id === 'pro')
       setAvailablePlans(plans)
       const planIds = new Set(plans.map((p) => p.id))
 
@@ -109,6 +122,37 @@ export default function SubscriptionUpgradePage() {
     setFeedback(`Abonnement opdateret til ${label}.`)
   }
 
+  const completeStripePlaceholderPayment = async () => {
+    if (paymentPlaceholderBusy) return
+    setPaymentPlaceholderBusy(true)
+    setFeedback('Stripe placeholder: betaling simuleret. Aktiverer Pro og sender dig videre...')
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) {
+      setPaymentPlaceholderBusy(false)
+      router.push('/login')
+      return
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ subscription_tier: 'pro' })
+      .eq('id', user.id)
+
+    if (error) {
+      setPaymentPlaceholderBusy(false)
+      setFeedback(`Kunne ikke aktivere Pro: ${error.message}`)
+      return
+    }
+
+    setSubscriptionPlanId('pro')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    setPaymentPlaceholderBusy(false)
+    router.push(nextPath)
+  }
+
   if (loading) {
     return (
       <div className={styles.shell}>
@@ -119,7 +163,17 @@ export default function SubscriptionUpgradePage() {
 
   return (
     <div className={styles.shell}>
-      <button type="button" className={styles.backLink} onClick={() => router.push('/userdashboard')}>
+      <button
+        type="button"
+        className={styles.backLink}
+        onClick={() => {
+          if (setupMode) {
+            router.push('/onboarding?step=3')
+            return
+          }
+          router.back()
+        }}
+      >
         ← Tilbage til dashboard
       </button>
 
@@ -129,32 +183,42 @@ export default function SubscriptionUpgradePage() {
           Vælg den plan der passer til dit forløb. Du kan skifte når som helst.
         </p>
       </div>
+      <div className={styles.successBanner}>
+        Betalingssetup (Stripe) er en placeholder. Udfyld felterne og tryk “Fuldfør betaling”.
+      </div>
 
       <div className={styles.panel}>
-        <div className={styles.currentLabel}>Dit nuværende abonnement</div>
-        <div className={styles.currentPlan}>
-          {availablePlans.find((p) => p.id === subscriptionPlanId)?.name ?? subscriptionPlanId}
-        </div>
-
-        <div className={styles.planList}>
-          {availablePlans.map((plan) => {
-            const isCurrent = plan.id === subscriptionPlanId
-            const description =
-              plan.description?.trim() || planBlurb[plan.id] || 'Abonnementsplan fra Mit Produkt.'
-            return (
-              <button
-                key={plan.id}
-                type="button"
-                className={`${styles.planCard} ${isCurrent ? styles.planCardActive : ''}`}
-                disabled={saving || isCurrent}
-                onClick={() => selectPlan(plan.id)}
-              >
-                <div className={styles.planName}>{plan.name}</div>
-                <div className={styles.planDesc}>{description}</div>
-                {isCurrent ? <span className={styles.planBadge}>Aktiv plan</span> : null}
-              </button>
-            )
-          })}
+        <div className={styles.stripePlaceholderCard}>
+          <div className={styles.stripePlaceholderTitle}>Stripe betaling (placeholder)</div>
+          <p className={styles.stripePlaceholderMeta}>
+            Denne sektion simulerer kortbetaling. Ingen rigtig transaktion gennemføres endnu.
+          </p>
+          <div className={styles.stripePlaceholderGrid}>
+            <label className={styles.stripeField}>
+              <span>Kortnummer</span>
+              <input type="text" value="4242 4242 4242 4242" readOnly />
+            </label>
+            <label className={styles.stripeField}>
+              <span>Udløb</span>
+              <input type="text" value="12/34" readOnly />
+            </label>
+            <label className={styles.stripeField}>
+              <span>CVC</span>
+              <input type="text" value="123" readOnly />
+            </label>
+            <label className={styles.stripeField}>
+              <span>Kortholder</span>
+              <input type="text" value="Test Bruger" readOnly />
+            </label>
+          </div>
+          <button
+            type="button"
+            className={styles.stripePlaceholderPayBtn}
+            onClick={completeStripePlaceholderPayment}
+            disabled={paymentPlaceholderBusy}
+          >
+            {paymentPlaceholderBusy ? 'Behandler betaling...' : 'Fuldfør betaling (placeholder)'}
+          </button>
         </div>
 
         {feedback ? (

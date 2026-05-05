@@ -44,6 +44,11 @@ export default function UserProfilePage() {
         .select('role,profile_completed,full_name,contact_email,address,gender,payment_method,payment_status')
         .eq('id', user.id)
         .single()
+      const { data: professional } = await supabase
+        .from('professionals')
+        .select('approval_status')
+        .eq('user_id', user.id)
+        .maybeSingle()
 
       if (error) {
         console.error(error)
@@ -52,8 +57,12 @@ export default function UserProfilePage() {
       }
 
       const profile = data as ProfileRow
-      if (profile.role === 'professional') {
+      if (professional?.approval_status === 'approved') {
         router.push('/gynaekolog-dashboard')
+        return
+      }
+      if (professional) {
+        router.push('/gynaekolog-pending')
         return
       }
 

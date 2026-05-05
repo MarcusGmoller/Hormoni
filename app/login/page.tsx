@@ -47,6 +47,43 @@ function LoginForm() {
     if (oauthError) setError(oauthError.message)
   }
 
+  const ensureProfessionalProfileAndRedirect = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) {
+      setError('Kunne ikke hente gynækolog-bruger efter login.')
+      return
+    }
+
+    const { data: professional } = await supabase
+      .from('professionals')
+      .select('approval_status,bio,professional_name,payment_information,professional_email,professional_phone')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (!professional) {
+      router.push('/gynaekolog-onboarding')
+      router.refresh()
+      return
+    }
+
+    if (professional.approval_status === 'approved') {
+      router.push('/gynaekolog-dashboard')
+    } else if (
+      !professional.bio?.trim() ||
+      !professional.professional_name?.trim() ||
+      !professional.payment_information?.trim() ||
+      !professional.professional_email?.trim() ||
+      !professional.professional_phone?.trim()
+    ) {
+      router.push('/gynaekolog-onboarding')
+    } else {
+      router.push('/gynaekolog-pending')
+    }
+    router.refresh()
+  }
+
   const ensureUserProfileAndRedirect = async () => {
     const {
       data: { user },
@@ -65,8 +102,6 @@ function LoginForm() {
     e.preventDefault()
     setError(null)
     setMessage(null)
-
-    if (role !== 'user') return
 
     const trimmedEmail = email.trim()
     if (!trimmedEmail || !password) {
@@ -104,22 +139,25 @@ function LoginForm() {
         }
 
         if (data.session) {
-          await ensureUserProfileAndRedirect()
+          if (role === 'professional') await ensureProfessionalProfileAndRedirect()
+          else await ensureUserProfileAndRedirect()
         } else if (data.user) {
-          const isLocalHost =
-            typeof window !== 'undefined' &&
-            /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)
+          // Midlertidigt flow: forsøg at logge ind direkte efter signup,
+          // så brugeren kan fortsætte uden at vente på mailbekræftelse.
+          const { error: immediateSignInError } = await supabase.auth.signInWithPassword({
+            email: trimmedEmail,
+            password,
+          })
+
+          if (!immediateSignInError) {
+            if (role === 'professional') await ensureProfessionalProfileAndRedirect()
+            else await ensureUserProfileAndRedirect()
+            return
+          }
+
           setMessage(
-            [
-              'Din konto afventer e-mailbekræftelse. Supabase har forsøgt at sende et link til din indbakke.',
-              isLocalHost
-                ? 'Bruger du `supabase start` lokalt, lander mail ikke i Gmail — åbn Inbucket på http://localhost:54324 og find mailen der.'
-                : null,
-              'På hosted Supabase: Authentication → Logs (Auth) viser om afsendelse fejler. Tjek spam. Under Authentication → Providers → Email skal e-mail være aktiveret.',
-              'Bemærk: Hvis "Confirm email" er slået fra i Dashboard, oprettes du uden mail og uden dette trin — så skal du i stedet kunne logge ind med det samme (prøv fanen "Log ind").',
-            ]
-              .filter(Boolean)
-              .join(' ')
+            `Konto oprettet. Automatisk login lykkedes ikke endnu (${immediateSignInError.message}). ` +
+              'Prøv at logge ind med e-mail og adgangskode med det samme.'
           )
           setPassword('')
           setConfirmPassword('')
@@ -139,7 +177,11 @@ function LoginForm() {
           return
         }
 
-        await ensureUserProfileAndRedirect()
+        if (role === 'professional') {
+          await ensureProfessionalProfileAndRedirect()
+        } else {
+          await ensureUserProfileAndRedirect()
+        }
       }
     } finally {
       setLoading(false)
@@ -188,108 +230,114 @@ function LoginForm() {
           </div>
         </div>
 
+        <div className="mb-4 flex rounded-lg border border-gray-200 p-1">
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('signin')
+              setError(null)
+              setMessage(null)
+            }}
+            className={[
+              'flex-1 rounded-md py-2 text-sm font-medium',
+              authMode === 'signin' ? 'bg-gray-900 text-white' : 'text-gray-600',
+            ].join(' ')}
+          >
+            Log ind
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('signup')
+              setError(null)
+              setMessage(null)
+            }}
+            className={[
+              'flex-1 rounded-md py-2 text-sm font-medium',
+              authMode === 'signup' ? 'bg-gray-900 text-white' : 'text-gray-600',
+            ].join(' ')}
+          >
+            Opret konto
+          </button>
+        </div>
+
+        <form onSubmit={handleEmailAuth} className="space-y-3">
+          <div>
+            <label htmlFor="email" className="mb-1 block text-xs font-medium text-gray-700">
+              E-mail
+            </label>
+            <input
+              id="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(ev) => setEmail(ev.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="password" className="mb-1 block text-xs font-medium text-gray-700">
+              Adgangskode
+            </label>
+            <input
+              id="password"
+              type="password"
+              autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+              value={password}
+              onChange={(ev) => setPassword(ev.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              required
+              minLength={6}
+            />
+          </div>
+          {authMode === 'signup' && (
+            <div>
+              <label htmlFor="confirmPassword" className="mb-1 block text-xs font-medium text-gray-700">
+                Gentag adgangskode
+              </label>
+              <input
+                id="confirmPassword"
+                type="password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(ev) => setConfirmPassword(ev.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                required
+                minLength={6}
+              />
+            </div>
+          )}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-gray-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-60"
+          >
+            {loading ? 'Vent…' : authMode === 'signup' ? 'Opret konto' : 'Log ind med e-mail'}
+          </button>
+        </form>
+
+        <div className="relative my-6">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-gray-200" />
+          </div>
+          <div className="relative flex justify-center text-xs uppercase text-gray-500">
+            <span className="bg-white px-2">eller</span>
+          </div>
+        </div>
+
         {role === 'user' && (
           <>
-            <div className="mb-4 flex rounded-lg border border-gray-200 p-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode('signin')
-                  setError(null)
-                  setMessage(null)
-                }}
-                className={[
-                  'flex-1 rounded-md py-2 text-sm font-medium',
-                  authMode === 'signin' ? 'bg-gray-900 text-white' : 'text-gray-600',
-                ].join(' ')}
-              >
-                Log ind
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode('signup')
-                  setError(null)
-                  setMessage(null)
-                }}
-                className={[
-                  'flex-1 rounded-md py-2 text-sm font-medium',
-                  authMode === 'signup' ? 'bg-gray-900 text-white' : 'text-gray-600',
-                ].join(' ')}
-              >
-                Opret konto
-              </button>
-            </div>
-
-            <form onSubmit={handleEmailAuth} className="space-y-3">
-              <div>
-                <label htmlFor="email" className="mb-1 block text-xs font-medium text-gray-700">
-                  E-mail
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(ev) => setEmail(ev.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  required
-                />
-              </div>
-              <div>
-                <label htmlFor="password" className="mb-1 block text-xs font-medium text-gray-700">
-                  Adgangskode
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                  value={password}
-                  onChange={(ev) => setPassword(ev.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  required
-                  minLength={6}
-                />
-              </div>
-              {authMode === 'signup' && (
-                <div>
-                  <label htmlFor="confirmPassword" className="mb-1 block text-xs font-medium text-gray-700">
-                    Gentag adgangskode
-                  </label>
-                  <input
-                    id="confirmPassword"
-                    type="password"
-                    autoComplete="new-password"
-                    value={confirmPassword}
-                    onChange={(ev) => setConfirmPassword(ev.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                    required
-                    minLength={6}
-                  />
-                </div>
-              )}
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-lg bg-gray-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-60"
-              >
-                {loading ? 'Vent…' : authMode === 'signup' ? 'Opret konto' : 'Log ind med e-mail'}
-              </button>
-            </form>
-
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-200" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase text-gray-500">
-                <span className="bg-white px-2">eller</span>
-              </div>
-            </div>
+            <p className="mb-2 text-xs text-gray-500">
+              Som bruger kan du logge ind med e-mail/adgangskode eller Google.
+            </p>
           </>
         )}
 
         {role === 'professional' && (
-          <p className="mb-4 text-sm text-gray-600">Som gynækolog logger du ind med Google.</p>
+          <p className="mb-4 text-sm text-gray-600">
+            Som gynækolog kan du oprette dig med e-mail eller Google. Nye profiler markeres som pending og skal godkendes af admin.
+          </p>
         )}
 
         <div className="space-y-3">

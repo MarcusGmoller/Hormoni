@@ -50,6 +50,48 @@
   background: #f8fafc;
 }
 
+.logoutBtn {
+  align-self: flex-start;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #9f1239;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.logoutBtn:hover {
+  background: #ffe4e6;
+}
+
+.deleteProfileBtn {
+  align-self: flex-start;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #ef4444;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.deleteProfileBtn:hover {
+  background: #dc2626;
+}
+
+.deleteConfirmInput {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #0f172a;
+  background: #ffffff;
+}
+
 .upgradeCard {
   width: min(340px, 100%);
   border: 1px solid #bae6fd;
@@ -458,6 +500,35 @@
   font-size: 12px;
   color: #64748b;
   line-height: 1.35;
+}
+
+.historyToggleBtn {
+  margin-top: 8px;
+  border: 0;
+  background: transparent;
+  color: #0284c7;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.historyToggleBtn:hover {
+  text-decoration: underline;
+}
+
+.historyList {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.historyItem {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+  background: #f8fafc;
 }
 
 .nextLabel {

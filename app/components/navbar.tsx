@@ -8,6 +8,8 @@ const navItems = [
   { href: '/professionals', label: 'Gynaekologer' },
   { href: '/userdashboard', label: 'Dashboard' },
   { href: '/health-log', label: 'Helbred log' },
+  { href: '/admin', label: 'Admin' },
+  { href: '/debug-db', label: 'Debug DB' },
   { href: '/login', label: 'Log ind' },
 ]
 

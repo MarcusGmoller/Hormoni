@@ -5,13 +5,12 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import styles from './doctorLayout.module.css'
 
-type View = 'patients' | 'messages' | 'calendar' | 'reporting' | 'stats' | 'settings'
+type View = 'patients' | 'messages' | 'calendar' | 'stats' | 'settings'
 
 const nav = [
   { view: 'patients' as const, label: 'Patienter', icon: '👤' },
   { view: 'messages' as const, label: 'Beskeder', icon: '💬' },
   { view: 'calendar' as const, label: 'Kalender', icon: '🗓️' },
-  { view: 'reporting' as const, label: 'Indberet tid', icon: '⏱️' },
   { view: 'stats' as const, label: 'Statistik', icon: '📊' },
   { view: 'settings' as const, label: 'Indstillinger', icon: '⚙️' },
 ]
@@ -21,7 +20,7 @@ export default function DoctorLayoutClient({ children }: { children: ReactNode }
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [doctorName, setDoctorName] = useState('Gynækolog')
-  const [doctorRole, setDoctorRole] = useState('Professional')
+  const [doctorRole] = useState('Gynækolog')
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0)
   const [pendingAppointmentsCount, setPendingAppointmentsCount] = useState(0)
   const activeParam = searchParams.get('view')
@@ -29,7 +28,6 @@ export default function DoctorLayoutClient({ children }: { children: ReactNode }
     activeParam === 'patients' ||
     activeParam === 'messages' ||
     activeParam === 'calendar' ||
-    activeParam === 'reporting' ||
     activeParam === 'stats' ||
     activeParam === 'settings'
       ? activeParam
@@ -95,21 +93,23 @@ export default function DoctorLayoutClient({ children }: { children: ReactNode }
   useEffect(() => {
     const loadDoctorMeta = async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const { data: profileRows } = await supabase
-        .from('profiles')
-        .select('full_name,role')
-        .eq('id', user.id)
-        .limit(1)
-      const profile = profileRows?.[0]
-
-      if (profile?.full_name) setDoctorName(profile.full_name)
-      if (profile?.role === 'professional') {
-        setDoctorRole('Gynækolog')
-      } else if (profile?.role) {
-        setDoctorRole(profile.role)
+      if (!user) {
+        router.push('/login')
+        return
       }
+
+      const { data: professional } = await supabase
+        .from('professionals')
+        .select('approval_status,professional_name')
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (!professional || professional.approval_status !== 'approved') {
+        router.push('/gynaekolog-pending')
+        return
+      }
+
+      if (professional.professional_name?.trim()) setDoctorName(professional.professional_name.trim())
     }
 
     loadDoctorMeta()

@@ -1,14 +1,12 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import { assertAdminByBearerToken } from '@/lib/serverAdminAuth'
+import { getSupabaseServiceEnvOrError } from '@/lib/requireSupabaseServiceEnv'
 
 export async function POST(request: NextRequest) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!url || !publishableKey || !serviceRoleKey) {
-    return NextResponse.json({ error: 'Mangler Supabase miljøvariabler.' }, { status: 500 })
-  }
+  const boot = getSupabaseServiceEnvOrError()
+  if (!boot.ok) return boot.response
+  const { url, publishableKey, serviceRoleKey } = boot.env
 
   const authHeader = request.headers.get('authorization')
   const jwt = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null
@@ -29,26 +27,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Mangler professionalUserId.' }, { status: 400 })
   }
 
-  // Verificer at anmoder er logget ind.
+  // Verificer at anmoder er logget ind og er admin.
   const authClient = createClient(url, publishableKey, {
     global: { headers: { Authorization: `Bearer ${jwt}` } },
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   })
-  const {
-    data: { user: requester },
-    error: requesterError,
-  } = await authClient.auth.getUser(jwt)
-
-  if (requesterError || !requester) {
-    return NextResponse.json(
-      { error: requesterError?.message ?? 'Ugyldig eller udløbet session.' },
-      { status: 401 }
-    )
-  }
-
   const adminClient = createClient(url, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   })
+  const adminAuth = await assertAdminByBearerToken({
+    supabase: authClient,
+    jwt,
+    serviceRoleClient: adminClient,
+  })
+  if (!adminAuth.ok) {
+    return NextResponse.json({ error: adminAuth.error }, { status: adminAuth.status })
+  }
 
   const { data: professionalRow, error: professionalLoadError } = await adminClient
     .from('professionals')

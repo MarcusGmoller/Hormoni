@@ -21,6 +21,7 @@ type Conversation = {
   patient_id: string
   doctor_id: string
   created_at?: string
+  kind?: 'clinical' | 'admin' | string | null
 }
 
 type Message = {
@@ -184,6 +185,8 @@ export default function DoctorPageClient() {
   const [cprByPatientId, setCprByPatientId] = useState<Record<string, string>>({})
   const [messages, setMessages] = useState<Message[]>([])
   const [messagesLoading, setMessagesLoading] = useState(true)
+  const [adminSupportEnsureError, setAdminSupportEnsureError] = useState<string | null>(null)
+  const [adminSupportOpening, setAdminSupportOpening] = useState(false)
   const [doctorId, setDoctorId] = useState<string | null>(null)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [selectedConversationId, setSelectedConversationId] = useState('')
@@ -324,26 +327,96 @@ export default function DoctorPageClient() {
         setCprByPatientId({})
       }
 
-      const { data: rawConversations, error: conversationError } = await supabase
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+
+      const byId = new Map<string, Conversation>()
+      setAdminSupportEnsureError(null)
+
+      if (session?.access_token) {
+        try {
+          const ensureRes = await fetch('/api/support/ensure-admin-conversation', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          })
+          const ensureJson = (await ensureRes.json().catch(() => ({}))) as {
+            error?: string
+            conversationId?: string
+            conversation?: Conversation
+          }
+          if (!ensureRes.ok) {
+            setAdminSupportEnsureError(
+              typeof ensureJson.error === 'string'
+                ? ensureJson.error
+                : `Kunne ikke sikre administrationssamtale (${ensureRes.status}).`,
+            )
+          } else {
+            const ensured = ensureJson.conversation
+            const cid = ensureJson.conversationId
+            if (ensured?.id) {
+              byId.set(ensured.id, ensured as Conversation)
+            } else if (cid) {
+              const { data: extra } = await supabase
+                .from('conversations')
+                .select('id,patient_id,doctor_id,created_at,kind')
+                .eq('id', cid)
+                .maybeSingle()
+              if (extra?.id) byId.set(extra.id, extra as Conversation)
+            }
+          }
+        } catch {
+          setAdminSupportEnsureError('Netværksfejl. Tjek forbindelsen og prøv igen.')
+        }
+      }
+
+      const { data: asDoctorRows, error: asDoctorErr } = await supabase
         .from('conversations')
-        .select('id,patient_id,doctor_id,created_at')
+        .select('id,patient_id,doctor_id,created_at,kind')
         .eq('doctor_id', user.id)
         .order('created_at', { ascending: false })
 
-      if (conversationError) {
-        setMessagesLoading(false)
-        setError(conversationError.message)
+      if (asDoctorErr) {
+        setError((prev) => prev ?? asDoctorErr.message)
       } else {
-        const conversations = (rawConversations ?? []) as Conversation[]
-        setConversations(conversations)
-        if (conversations.length > 0) {
-          setSelectedConversationId((current) => current || conversations[0].id)
+        for (const row of (asDoctorRows ?? []) as Conversation[]) {
+          if (row?.id) byId.set(row.id, row)
         }
-        if (conversations.length === 0) {
-          setMessages([])
-          setMessagesLoading(false)
-        } else {
-          const conversationIds = conversations.map((c) => c.id)
+      }
+
+      const { data: adminAsPatientRow, error: adminPatientErr } = await supabase
+        .from('conversations')
+        .select('id,patient_id,doctor_id,created_at,kind')
+        .eq('patient_id', user.id)
+        .eq('kind', 'admin')
+        .maybeSingle()
+
+      if (adminPatientErr) {
+        setError((prev) => prev ?? adminPatientErr.message)
+      } else if (adminAsPatientRow?.id) {
+        byId.set(adminAsPatientRow.id, adminAsPatientRow as Conversation)
+      }
+
+      let conversations = Array.from(byId.values())
+
+      const adminConv = conversations.filter((c) => c.kind === 'admin')
+      const clinicalConv = conversations.filter((c) => c.kind !== 'admin')
+      clinicalConv.sort((a, b) => {
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0
+        return tb - ta
+      })
+      conversations = [...adminConv, ...clinicalConv]
+
+      setConversations(conversations)
+      if (conversations.length > 0) {
+        setSelectedConversationId((current) => current || conversations[0].id)
+      }
+      if (conversations.length === 0) {
+        setMessages([])
+        setMessagesLoading(false)
+      } else {
+        const conversationIds = conversations.map((c) => c.id)
           const patientIdsFromConversations = Array.from(new Set(conversations.map((c) => c.patient_id)))
           const missingProfileIds = patientIdsFromConversations.filter((id) => !patientNamesById[id])
           if (missingProfileIds.length > 0) {
@@ -408,7 +481,6 @@ export default function DoctorPageClient() {
             setMessages((rawMessages ?? []) as Message[])
           }
           setMessagesLoading(false)
-        }
       }
 
       await loadOpenSlots(user.id)
@@ -818,7 +890,9 @@ export default function DoctorPageClient() {
   )
 
   const selectedPatientName = selectedConversation
-    ? patientNamesById[selectedConversation.patient_id] ?? 'Patient'
+    ? selectedConversation.kind === 'admin'
+      ? 'Administrationen'
+      : patientNamesById[selectedConversation.patient_id] ?? 'Patient'
     : 'Beskeder'
 
   const latestMessageByConversationId = useMemo(() => {
@@ -832,25 +906,132 @@ export default function DoctorPageClient() {
   }, [messages])
 
   const conversationRows = useMemo(() => {
-    return conversations
-      .map((conversation) => {
-        const name = patientNamesById[conversation.patient_id] ?? 'Patient'
-        const initials =
-          name
+    const buildRow = (conversation: Conversation) => {
+      const isAdmin = conversation.kind === 'admin'
+      const name = isAdmin ? 'Administrationen' : patientNamesById[conversation.patient_id] ?? 'Patient'
+      const initials = isAdmin
+        ? 'A'
+        : name
             .split(/\s+/)
             .slice(0, 2)
             .map((part) => part[0]?.toUpperCase() ?? '')
             .join('') || 'P'
-        const latest = latestMessageByConversationId[conversation.id] ?? null
-        const needsReply = Boolean(latest && doctorId && latest.sender_id !== doctorId)
-        return { conversation, name, initials, latest, needsReply }
-      })
+      const latest = latestMessageByConversationId[conversation.id] ?? null
+      const needsReply = Boolean(latest && doctorId && latest.sender_id !== doctorId)
+      return { conversation, name, initials, latest, needsReply, pinned: isAdmin }
+    }
+
+    const adminRows = conversations.filter((c) => c.kind === 'admin').map(buildRow)
+    const clinicalRows = conversations
+      .filter((c) => c.kind !== 'admin')
+      .map(buildRow)
       .sort((a, b) => {
         const ta = a.latest ? new Date(a.latest.created_at).getTime() : 0
         const tb = b.latest ? new Date(b.latest.created_at).getTime() : 0
         return tb - ta
       })
+
+    return [...adminRows, ...clinicalRows]
   }, [conversations, patientNamesById, latestMessageByConversationId, doctorId])
+
+  const clinicalConversationRows = useMemo(
+    () => conversationRows.filter((row) => !row.pinned),
+    [conversationRows],
+  )
+
+  const adminConversation = useMemo(
+    () => conversations.find((c) => c.kind === 'admin') ?? null,
+    [conversations],
+  )
+
+  const adminPinnedLatest = adminConversation
+    ? latestMessageByConversationId[adminConversation.id] ?? null
+    : null
+
+  const adminPinnedNeedsReply = Boolean(
+    adminPinnedLatest && doctorId && adminPinnedLatest.sender_id !== doctorId,
+  )
+
+  const isAdminThreadSelected = Boolean(
+    adminConversation && selectedConversationId === adminConversation.id,
+  )
+
+  const openOrEnsureAdminConversation = async () => {
+    if (adminConversation?.id) {
+      setSelectedConversationId(adminConversation.id)
+      return
+    }
+    setAdminSupportOpening(true)
+    setAdminSupportEnsureError(null)
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const token = session?.access_token
+      if (!token) {
+        setAdminSupportEnsureError('Ingen aktiv session.')
+        setAdminSupportOpening(false)
+        return
+      }
+      const ensureRes = await fetch('/api/support/ensure-admin-conversation', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const ensureJson = (await ensureRes.json().catch(() => ({}))) as {
+        error?: string
+        conversationId?: string
+        conversation?: Conversation
+      }
+      if (!ensureRes.ok) {
+        setAdminSupportEnsureError(
+          typeof ensureJson.error === 'string'
+            ? ensureJson.error
+            : `Kunne ikke åbne samtale (${ensureRes.status}).`,
+        )
+        setAdminSupportOpening(false)
+        return
+      }
+      let row: Conversation | null = (ensureJson.conversation as Conversation) ?? null
+      const cid = ensureJson.conversationId
+      if (!row?.id && cid) {
+        const { data: extra } = await supabase
+          .from('conversations')
+          .select('id,patient_id,doctor_id,created_at,kind')
+          .eq('id', cid)
+          .maybeSingle()
+        row = (extra as Conversation) ?? null
+      }
+      if (!row?.id) {
+        setAdminSupportOpening(false)
+        return
+      }
+      let nextConversations: Conversation[] = []
+      setConversations((prev) => {
+        const clinicalOnly = prev.filter((c) => c.kind !== 'admin')
+        const sortedClinical = [...clinicalOnly].sort((a, b) => {
+          const ta = a.created_at ? new Date(a.created_at).getTime() : 0
+          const tb = b.created_at ? new Date(b.created_at).getTime() : 0
+          return tb - ta
+        })
+        nextConversations = [row!, ...sortedClinical]
+        return nextConversations
+      })
+      const messageConversationIds = nextConversations.map((c) => c.id)
+      setSelectedConversationId(row.id)
+      const { data: rawMessages, error: msgErr } = await supabase
+        .from('messages')
+        .select('id,body,created_at,conversation_id,sender_id')
+        .in('conversation_id', messageConversationIds)
+        .order('created_at', { ascending: false })
+        .limit(50)
+      if (!msgErr) {
+        setMessages((rawMessages ?? []) as Message[])
+      }
+    } catch {
+      setAdminSupportEnsureError('Netværksfejl. Prøv igen.')
+    }
+    setAdminSupportOpening(false)
+  }
 
   const sendMessage = async () => {
     if (!doctorId || !selectedConversationId || !messageBody.trim()) return
@@ -1484,13 +1665,41 @@ export default function DoctorPageClient() {
         {currentView === 'messages' && (
           <div className={styles.messagesShell}>
             <aside className={styles.messagesSidebar}>
+              {adminSupportEnsureError ? (
+                <div className={styles.supportEnsureErr} role="alert">
+                  {adminSupportEnsureError}
+                  <button type="button" className={styles.supportRetryBtn} onClick={() => void openOrEnsureAdminConversation()}>
+                    Prøv igen
+                  </button>
+                </div>
+              ) : null}
               {messagesLoading ? (
                 <div className={styles.meta}>Loader samtaler...</div>
-              ) : conversationRows.length === 0 ? (
-                <div className={styles.meta}>Ingen samtaler fundet.</div>
               ) : (
                 <div className={styles.list}>
-                  {conversationRows.map((row) => (
+                  <button
+                    type="button"
+                    key="__pinned_admin__"
+                    disabled={adminSupportOpening}
+                    className={`${styles.row} ${styles.rowPinned} ${isAdminThreadSelected ? styles.rowActive : ''} ${adminPinnedNeedsReply ? styles.rowNeedsReply : ''}`}
+                    onClick={() => void openOrEnsureAdminConversation()}
+                  >
+                    <div className={styles.avatar}>A</div>
+                    <div className={styles.rowMain}>
+                      <div className={styles.name}>
+                        <span className={styles.pinnedBadge}>Fastgjort</span>
+                        Administrationen
+                      </div>
+                      <div className={styles.meta}>
+                        {adminSupportOpening
+                          ? 'Åbner…'
+                          : adminPinnedLatest?.body?.slice(0, 80) ??
+                            'Skriv her ved problemer med platformen, aftaler eller din profil.'}
+                      </div>
+                    </div>
+                    {adminPinnedNeedsReply ? <span className={styles.replyBadge}>Afventer svar</span> : null}
+                  </button>
+                  {clinicalConversationRows.map((row) => (
                     <button
                       key={row.conversation.id}
                       type="button"
@@ -1507,6 +1716,9 @@ export default function DoctorPageClient() {
                       {row.needsReply && <span className={styles.replyBadge}>Afventer svar</span>}
                     </button>
                   ))}
+                  {clinicalConversationRows.length === 0 ? (
+                    <div className={styles.metaMuted}>Ingen patientsamtaler endnu.</div>
+                  ) : null}
                 </div>
               )}
             </aside>
@@ -1518,7 +1730,11 @@ export default function DoctorPageClient() {
 
               <div className={styles.threadNotice}>
                 <span aria-hidden="true">💬</span>
-                <span>Skriv med patienten her. Svarene vises i samme tråd som hos bruger.</span>
+                <span>
+                  {selectedConversation?.kind === 'admin'
+                    ? 'Skriv med Hormoni-administrationen. Tråden er adskilt fra dine patientsamtaler.'
+                    : 'Skriv med patienten her. Svarene vises i samme tråd som hos bruger.'}
+                </span>
               </div>
 
               <div className={styles.threadMessages} ref={messagesScrollerRef}>

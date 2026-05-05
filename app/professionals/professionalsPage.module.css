@@ -59,25 +59,6 @@
   gap: 10px;
 }
 
-@media (min-width: 640px) {
-  .card {
-    flex-direction: row;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 20px;
-  }
-
-  .cardMain {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .cardAside {
-    flex-shrink: 0;
-    align-self: center;
-  }
-}
-
 .cardMain {
   display: flex;
   flex-direction: column;
@@ -105,31 +86,6 @@
   line-height: 1.45;
 }
 
-.cardAside {
-  display: flex;
-  align-items: center;
-}
-
-.bookBtn {
-  padding: 10px 18px;
-  border-radius: 12px;
-  border: 1px solid #0ea5e9;
-  background: #0ea5e9;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background 0.12s ease,
-    border-color 0.12s ease;
-}
-
-.bookBtn:hover {
-  background: #0284c7;
-  border-color: #0284c7;
-}
-
 .loading {
   margin: 0;
   font-size: 14px;
@@ -144,4 +100,219 @@
   font-size: 14px;
   color: #64748b;
   background: #f8fafc;
+}
+
+.slotsSection {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.slotsHeading {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.slotsDayBlock + .slotsDayBlock {
+  margin-top: 12px;
+}
+
+.slotsDayLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 8px;
+}
+
+.slotsChipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.slotChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 10px;
+  white-space: nowrap;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.slotChip:hover {
+  background: #e0f2fe;
+  border-color: #0ea5e9;
+  box-shadow: 0 1px 2px rgba(14, 165, 233, 0.15);
+}
+
+.slotChip:focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
+}
+
+.noSlots {
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  animation: modalFadeIn 0.15s ease;
+}
+
+@media (min-width: 640px) {
+  .modalBackdrop {
+    align-items: center;
+  }
+}
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modalPanel {
+  width: min(480px, 100%);
+  max-height: min(90vh, 640px);
+  overflow-y: auto;
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.2);
+  padding: 22px 22px 18px;
+}
+
+.modalTitle {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.modalSubtitle {
+  margin: 0 0 14px;
+  font-size: 14px;
+  color: #475569;
+  line-height: 1.4;
+}
+
+.modalTime {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.modalList {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.modalList li {
+  margin-bottom: 6px;
+}
+
+.modalWarn {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  font-size: 13px;
+  color: #92400e;
+  line-height: 1.45;
+}
+
+.modalErr {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  font-size: 13px;
+  color: #b91c1c;
+}
+
+.modalActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.modalBtnSecondary {
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modalBtnSecondary:hover {
+  background: #f8fafc;
+}
+
+.modalBtnSecondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modalBtnPrimary {
+  padding: 10px 18px;
+  border-radius: 12px;
+  border: 1px solid #0ea5e9;
+  background: #0ea5e9;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modalBtnPrimary:hover:not(:disabled) {
+  background: #0284c7;
+  border-color: #0284c7;
+}
+
+.modalBtnPrimary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

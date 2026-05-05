@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@supabase/supabase-js'
 import type { EmailOtpType } from '@supabase/supabase-js'
@@ -12,7 +12,7 @@ import { syncProfileAfterAuthAndResolvePath } from '@/lib/authPostLogin'
  */
 function ConfirmContent() {
   const router = useRouter()
-  const [message, setMessage] = useState('Bekræfter din konto…')
+  const message = 'Bekræfter din konto…'
   const started = useRef(false)
 
   useEffect(() => {

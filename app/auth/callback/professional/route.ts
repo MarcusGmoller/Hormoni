@@ -1,79 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-
-const routeByProfessionalState = (
-  professional: {
-    approval_status: string
-    bio?: string | null
-    professional_name?: string | null
-    payment_information?: string | null
-    professional_email?: string | null
-    professional_phone?: string | null
-  } | null
-) => {
-  if (!professional) return '/gynaekolog-onboarding'
-  if (professional.approval_status === 'approved') return '/gynaekolog-dashboard'
-  if (
-    !professional.bio?.trim() ||
-    !professional.professional_name?.trim() ||
-    !professional.payment_information?.trim() ||
-    !professional.professional_email?.trim() ||
-    !professional.professional_phone?.trim()
-  ) {
-    return '/gynaekolog-onboarding'
-  }
-  return '/gynaekolog-pending'
-}
+import {
+  createSupabaseRouteHandlerClient,
+  exchangeOAuthCodeForUser,
+  loginErrorRedirect,
+  readOAuthProviderError,
+} from '@/lib/authCallbackServer'
+import { ensureProfileSyncedWithAuth } from '@/lib/ensureProfileSyncedWithAuth'
+import { routeByProfessionalState, type ProfessionalForRouting } from '@/lib/authRouting'
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url)
-  const code = url.searchParams.get('code')
-  const response = NextResponse.redirect(new URL('/gynaekolog-onboarding', url.origin))
-
-  if (!code) return response
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll()
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set(name, value, options)
-          })
-        },
-      },
-    }
-  )
-
-  await supabase.auth.exchangeCodeForSession(code)
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (user) {
-    const { data: professional } = await supabase
-      .from('professionals')
-      .select('approval_status,bio,professional_name,payment_information,professional_email,professional_phone')
-      .eq('user_id', user.id)
-      .maybeSingle()
-
-    const destination = routeByProfessionalState(
-      professional as {
-        approval_status: string
-        bio?: string | null
-        professional_name?: string | null
-        payment_information?: string | null
-        professional_email?: string | null
-        professional_phone?: string | null
-      } | null
+  const providerErr = readOAuthProviderError(url)
+  if (providerErr) {
+    return NextResponse.redirect(
+      new URL(`/login?error=${encodeURIComponent(providerErr)}`, url.origin)
     )
-    response.headers.set('Location', new URL(destination, url.origin).toString())
   }
 
+  const code = url.searchParams.get('code')
+  if (!code) {
+    return loginErrorRedirect(url.origin, 'Mangler OAuth-kode. Prøv igen.')
+  }
+
+  const response = NextResponse.redirect(new URL('/gynaekolog-onboarding', url.origin))
+  const supabase = createSupabaseRouteHandlerClient(request, response)
+
+  const exchanged = await exchangeOAuthCodeForUser(supabase, code, url.origin)
+  if (!exchanged.ok) {
+    return exchanged.response
+  }
+
+  const ensured = await ensureProfileSyncedWithAuth(supabase, exchanged.user, {
+    intendedRole: 'professional',
+  })
+  if (!ensured.ok) {
+    return loginErrorRedirect(url.origin, ensured.message)
+  }
+
+  const { data: professional } = await supabase
+    .from('professionals')
+    .select(
+      'approval_status,bio,professional_name,payment_information,professional_email,professional_phone'
+    )
+    .eq('user_id', exchanged.user.id)
+    .maybeSingle()
+
+  const destination = routeByProfessionalState(professional as ProfessionalForRouting)
+  response.headers.set('Location', new URL(destination, url.origin).toString())
   return response
 }

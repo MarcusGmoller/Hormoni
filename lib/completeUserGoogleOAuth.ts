@@ -1,52 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
+import {
+  createSupabaseRouteHandlerClient,
+  exchangeOAuthCodeForUser,
+  loginErrorRedirect,
+  readOAuthProviderError,
+} from '@/lib/authCallbackServer'
 import { syncProfileAfterAuthAndResolvePath, type OAuthUserIntent } from '@/lib/authPostLogin'
 
 /**
- * PKCE callback for Google som **patient**: bytter code til session og dirigerer videre.
- * Brug separate path'er (user-signin / user-signup) — Supabase bevarer dem i redirect URL,
- * i modsætning til ekstra query-params der ofte stripper.
+ * PKCE callback for OAuth (fx Google, Facebook) som **patient**: bytter code til session og dirigerer videre.
+ * Brug `/auth/callback/user-signin` eller `user-signup` i redirectTo (intent i path, ikke query).
  */
 export async function completeUserGoogleOAuth(
   request: NextRequest,
   oauthUserIntent: OAuthUserIntent
 ) {
   const url = new URL(request.url)
-  const code = url.searchParams.get('code')
-
-  const response = NextResponse.redirect(new URL('/dashboard', url.origin))
-
-  if (!code) return response
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll()
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set(name, value, options)
-          })
-        },
-      },
-    }
-  )
-
-  await supabase.auth.exchangeCodeForSession(code)
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (user) {
-    const destination = await syncProfileAfterAuthAndResolvePath(supabase, user, {
-      oauthUserIntent,
-    })
-    response.headers.set('location', new URL(destination, url.origin).toString())
+  const providerErr = readOAuthProviderError(url)
+  if (providerErr) {
+    return NextResponse.redirect(
+      new URL(`/login?error=${encodeURIComponent(providerErr)}`, url.origin)
+    )
   }
 
+  const code = url.searchParams.get('code')
+  if (!code) {
+    return loginErrorRedirect(url.origin, 'Mangler OAuth-kode. Prøv igen.')
+  }
+
+  const response = NextResponse.redirect(new URL('/dashboard', url.origin))
+  const supabase = createSupabaseRouteHandlerClient(request, response)
+
+  const exchanged = await exchangeOAuthCodeForUser(supabase, code, url.origin)
+  if (!exchanged.ok) {
+    return exchanged.response
+  }
+
+  const destination = await syncProfileAfterAuthAndResolvePath(supabase, exchanged.user, {
+    oauthUserIntent,
+  })
+  response.headers.set('Location', new URL(destination, url.origin).toString())
   return response
 }

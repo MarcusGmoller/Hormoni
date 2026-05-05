@@ -9,6 +9,10 @@ type CheckResult = {
   details: string
 }
 
+type HealthLogUserRow = { id: string; user_id: string }
+type PrescriptionDoctorRow = { id: string; patient_id: string; doctor_id: string | null }
+type ProfileRoleRow = { id: string; role: string | null }
+
 export default function DebugDbPage() {
   const [checks, setChecks] = useState<CheckResult[]>([])
   const [summary, setSummary] = useState('')
@@ -119,7 +123,7 @@ export default function DebugDbPage() {
           details: `Fejl ved opslag: ${healthError.message}`,
         })
       } else {
-        const mismatched = (healthLogs ?? []).filter((row: any) => row.user_id !== user.id).length
+        const mismatched = (healthLogs ?? []).filter((row: HealthLogUserRow) => row.user_id !== user.id).length
         results.push({
           name: 'Profile ↔ user_health_condition_logs matcher',
           ok: mismatched === 0,
@@ -135,7 +139,9 @@ export default function DebugDbPage() {
         })
       } else {
         const doctorIds = Array.from(
-          new Set((userPrescriptions ?? []).map((row: any) => row.doctor_id).filter(Boolean))
+          new Set(
+            (userPrescriptions ?? []).map((row: PrescriptionDoctorRow) => row.doctor_id).filter(Boolean)
+          )
         ) as string[]
         let validDoctorIds = new Set<string>()
         if (doctorIds.length > 0) {
@@ -145,12 +151,13 @@ export default function DebugDbPage() {
             .in('id', doctorIds)
           validDoctorIds = new Set(
             (doctorProfiles ?? [])
-              .filter((row: any) => row.role === 'professional')
-              .map((row: any) => row.id)
+              .filter((row: ProfileRoleRow) => row.role === 'professional')
+              .map((row: ProfileRoleRow) => row.id)
           )
         }
         const invalidPrescriptionCount = (userPrescriptions ?? []).filter(
-          (row: any) => !validDoctorIds.has(row.doctor_id)
+          (row: PrescriptionDoctorRow) =>
+            !row.doctor_id || !validDoctorIds.has(row.doctor_id)
         ).length
         results.push({
           name: 'Prescriptions ↔ professionals matcher',

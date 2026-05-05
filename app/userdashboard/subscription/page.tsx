@@ -5,22 +5,13 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import styles from './subscriptionPage.module.css'
 
-type PlanRow = { id: string; name: string; description: string | null }
-
-const planBlurb: Record<string, string> = {
-  free: 'Én aktiv konsultation ad gangen. Ideelt til at komme i gang.',
-  pro: 'Book flere konsultationer og få fuld fleksibilitet i dit forløb.',
-}
-
 function SubscriptionUpgradePageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  /** Kun sat fra onboarding (`?setup=1`) — da peger Tilbage på trin 3. */
   const setupMode = searchParams.get('setup') === '1'
   const nextPath = searchParams.get('next') || '/dashboard/pro'
   const [loading, setLoading] = useState(true)
-  const [subscriptionPlanId, setSubscriptionPlanId] = useState<string>('free')
-  const [availablePlans, setAvailablePlans] = useState<PlanRow[]>([])
-  const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
   const [paymentPlaceholderBusy, setPaymentPlaceholderBusy] = useState(false)
 
@@ -34,14 +25,11 @@ function SubscriptionUpgradePageContent() {
         return
       }
 
-      const [{ data: profile, error }, { data: planRows, error: plansError }] = await Promise.all([
-        supabase
-          .from('profiles')
-          .select('profile_completed,role,subscription_tier')
-          .eq('id', user.id)
-          .single(),
-        supabase.from('plans').select('id,name,description').order('id'),
-      ])
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('profile_completed')
+        .eq('id', user.id)
+        .single()
       const { data: professional } = await supabase
         .from('professionals')
         .select('approval_status')
@@ -52,10 +40,6 @@ function SubscriptionUpgradePageContent() {
         console.error(error)
         router.push('/login')
         return
-      }
-
-      if (plansError) {
-        console.error(plansError)
       }
 
       if (professional?.approval_status === 'approved') {
@@ -72,55 +56,11 @@ function SubscriptionUpgradePageContent() {
         return
       }
 
-      const plans = ((planRows ?? []) as PlanRow[]).filter((plan) => plan.id === 'free' || plan.id === 'pro')
-      setAvailablePlans(plans)
-      const planIds = new Set(plans.map((p) => p.id))
-
-      const rawTier = profile.subscription_tier ?? 'free'
-      const legacyMapped =
-        rawTier === 'starter'
-          ? 'free'
-          : rawTier === 'plus' || rawTier === 'premium'
-            ? 'pro'
-            : rawTier
-      const resolved = planIds.has(legacyMapped)
-        ? legacyMapped
-        : planIds.has('free')
-          ? 'free'
-          : plans[0]?.id ?? 'free'
-      setSubscriptionPlanId(resolved)
       setLoading(false)
     }
 
     run()
   }, [router])
-
-  const selectPlan = async (planId: string) => {
-    if (saving || planId === subscriptionPlanId) return
-    setSaving(true)
-    setFeedback(null)
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    if (!user) {
-      setSaving(false)
-      router.push('/login')
-      return
-    }
-
-    const { error } = await supabase.from('profiles').update({ subscription_tier: planId }).eq('id', user.id)
-
-    setSaving(false)
-
-    if (error) {
-      setFeedback(`Kunne ikke opdatere abonnement: ${error.message}`)
-      return
-    }
-
-    setSubscriptionPlanId(planId)
-    const label = availablePlans.find((p) => p.id === planId)?.name ?? planId
-    setFeedback(`Abonnement opdateret til ${label}.`)
-  }
 
   const completeStripePlaceholderPayment = async () => {
     if (paymentPlaceholderBusy) return
@@ -147,7 +87,6 @@ function SubscriptionUpgradePageContent() {
       return
     }
 
-    setSubscriptionPlanId('pro')
     await new Promise((resolve) => setTimeout(resolve, 500))
     setPaymentPlaceholderBusy(false)
     router.push(nextPath)
@@ -171,10 +110,12 @@ function SubscriptionUpgradePageContent() {
             router.push('/onboarding?step=3')
             return
           }
-          router.back()
+          router.push('/dashboard')
         }}
       >
-        ← Tilbage til dashboard
+        {setupMode
+          ? '← Tilbage til opret profil (trin 3 af 3)'
+          : '← Tilbage til dashboard'}
       </button>
 
       <div className={styles.headerRow}>

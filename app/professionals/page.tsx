@@ -3,6 +3,11 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
+import {
+  getPatientBookingBlockState,
+  PATIENT_BOOKING_CONSULTATION_MINUTES,
+  patientBookConsultationSlot,
+} from '@/lib/patientBookConsultation'
 import styles from './professionalsPage.module.css'
 
 type Professional = {
@@ -11,7 +16,17 @@ type Professional = {
   bio: string | null
   professional_name: string | null
   public_profile: boolean
+  approval_status: string
   full_name: string | null
+}
+
+type ProfessionalRowDb = {
+  user_id: string
+  title: string | null
+  bio: string | null
+  professional_name: string | null
+  public_profile: boolean
+  approval_status: string
 }
 
 type OpenSlot = {
@@ -27,7 +42,7 @@ type Appointment = {
   status: string
 }
 
-const CONSULTATION_MINUTES = 20
+const CONSULTATION_MINUTES = PATIENT_BOOKING_CONSULTATION_MINUTES
 const BUFFER_MINUTES = 5
 const SLOT_STEP_MINUTES = CONSULTATION_MINUTES + BUFFER_MINUTES
 const CONSULTATION_MS = CONSULTATION_MINUTES * 60 * 1000
@@ -35,6 +50,92 @@ const SLOT_STEP_MS = SLOT_STEP_MINUTES * 60 * 1000
 
 const rangesOverlap = (startA: number, endA: number, startB: number, endB: number) =>
   startA < endB && endA > startB
+
+const localDayKey = (ms: number) => {
+  const d = new Date(ms)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+const startOfLocalDay = (ms: number) => {
+  const d = new Date(ms)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+const formatDayHeading = (firstSlotMs: number) => {
+  const d = new Date(firstSlotMs)
+  const today0 = startOfLocalDay(Date.now())
+  const slotDay0 = startOfLocalDay(firstSlotMs)
+  const tomorrow0 = today0 + 24 * 60 * 60 * 1000
+  if (slotDay0 === today0) return 'I dag'
+  if (slotDay0 === tomorrow0) return 'I morgen'
+  const weekday = d.toLocaleDateString('da-DK', { weekday: 'long' })
+  const capitalized = weekday ? weekday.charAt(0).toUpperCase() + weekday.slice(1) : ''
+  const rest = d.toLocaleDateString('da-DK', { day: 'numeric', month: 'long' })
+  return `${capitalized} ${rest}`
+}
+
+const formatSlotTime = (ms: number) =>
+  new Date(ms).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })
+
+/** Konsultationslængde matcher `expandOpenSlotWindows` (CONSULTATION_MINUTES). */
+const formatSlotTimeRange = (startMs: number) => {
+  const endMs = startMs + CONSULTATION_MS
+  return `${formatSlotTime(startMs)}–${formatSlotTime(endMs)}`
+}
+
+const formatSlotAriaLabel = (startMs: number) => {
+  const endMs = startMs + CONSULTATION_MS
+  const dayPart = new Date(startMs).toLocaleString('da-DK', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  })
+  return `Book tid ${dayPart} kl. ${formatSlotTime(startMs)}–${formatSlotTime(endMs)}`
+}
+
+const formatBookingSummaryLine = (startMs: number) => {
+  const endMs = startMs + CONSULTATION_MS
+  const dayPart = new Date(startMs).toLocaleString('da-DK', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  })
+  const capitalized = dayPart ? dayPart.charAt(0).toUpperCase() + dayPart.slice(1) : ''
+  return `${capitalized} kl. ${formatSlotTime(startMs)}–${formatSlotTime(endMs)}`
+}
+
+type DaySlotGroup = { key: string; label: string; starts: number[] }
+
+type BookingModalState = {
+  professionalId: string
+  professionalName: string
+  title: string | null
+  slotStartMs: number
+}
+
+const groupSlotStartsByDay = (startsMs: number[]): DaySlotGroup[] => {
+  const map = new Map<string, number[]>()
+  for (const ms of startsMs) {
+    const key = localDayKey(ms)
+    const arr = map.get(key) ?? []
+    arr.push(ms)
+    map.set(key, arr)
+  }
+  return Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, dayStarts]) => {
+      const sorted = [...dayStarts].sort((x, y) => x - y)
+      return {
+        key,
+        label: formatDayHeading(sorted[0]),
+        starts: sorted,
+      }
+    })
+}
 
 const expandOpenSlotWindows = (slots: OpenSlot[]) => {
   const nowMs = Date.now()
@@ -70,6 +171,19 @@ export default function ProfessionalsPage() {
   const [slotStartsByProfessional, setSlotStartsByProfessional] = useState<Record<string, number[]>>({})
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [bookingModal, setBookingModal] = useState<BookingModalState | null>(null)
+  const [modalError, setModalError] = useState<string | null>(null)
+  const [bookingSubmitting, setBookingSubmitting] = useState(false)
+  const [freePlanBlocked, setFreePlanBlocked] = useState(false)
+  const [freePlanHint, setFreePlanHint] = useState<string | null>(null)
+
+  useEffect(() => {
+    void (async () => {
+      const { blocked, hint } = await getPatientBookingBlockState(supabase)
+      setFreePlanBlocked(blocked)
+      setFreePlanHint(hint)
+    })()
+  }, [])
 
   useEffect(() => {
     const run = async () => {
@@ -86,10 +200,10 @@ export default function ProfessionalsPage() {
         return
       }
 
-      const nextProfessionals = ((professionals as any[]) ?? []).map((item) => ({
+      const nextProfessionals: Professional[] = ((professionals ?? []) as ProfessionalRowDb[]).map((item) => ({
         ...item,
         full_name: item.professional_name ?? null,
-      })) as Professional[]
+      }))
 
       const professionalIds = nextProfessionals.map((professional) => professional.user_id)
       if (professionalIds.length === 0) {
@@ -153,6 +267,52 @@ export default function ProfessionalsPage() {
     run()
   }, [])
 
+  const openBookingModal = async (p: Professional, slotStartMs: number) => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) {
+      router.push('/login')
+      return
+    }
+    const { blocked, hint } = await getPatientBookingBlockState(supabase)
+    setFreePlanBlocked(blocked)
+    setFreePlanHint(hint)
+    setModalError(null)
+    setBookingModal({
+      professionalId: p.user_id,
+      professionalName: p.full_name ?? 'Behandler',
+      title: p.title ?? null,
+      slotStartMs,
+    })
+  }
+
+  const closeBookingModal = () => {
+    setBookingModal(null)
+    setModalError(null)
+    setBookingSubmitting(false)
+  }
+
+  const confirmBooking = async () => {
+    if (!bookingModal || freePlanBlocked) return
+    setBookingSubmitting(true)
+    setModalError(null)
+    const result = await patientBookConsultationSlot(supabase, {
+      professionalId: bookingModal.professionalId,
+      slotStartMs: bookingModal.slotStartMs,
+    })
+    setBookingSubmitting(false)
+    if (!result.ok) {
+      if (result.kind === 'auth') {
+        router.push('/login')
+        return
+      }
+      setModalError(result.error)
+      return
+    }
+    router.push('/userdashboard')
+  }
+
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
@@ -183,54 +343,95 @@ export default function ProfessionalsPage() {
                       Ingen bio angivet.
                     </p>
                   )}
-                  <div style={{ marginTop: 10, fontSize: 13, color: '#475569' }}>
-                    {slotStartsByProfessional[p.user_id]?.length ? (
-                      <>
-                        <strong style={{ color: '#334155' }}>Ledige tider:</strong>{' '}
-                        {slotStartsByProfessional[p.user_id].slice(0, 5).map((slotStart, index) => (
-                          <span key={slotStart}>
-                            <button
-                              type="button"
-                              onClick={() => router.push(`/book/${p.user_id}?slotStart=${slotStart}`)}
-                              style={{
-                                color: '#0f172a',
-                                textDecoration: 'underline',
-                                background: 'transparent',
-                                border: 0,
-                                padding: 0,
-                                cursor: 'pointer',
-                                fontSize: 13,
-                              }}
-                            >
-                              {new Date(slotStart).toLocaleString('da-DK', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </button>
-                            {index < Math.min(slotStartsByProfessional[p.user_id].length, 5) - 1 ? ' · ' : ''}
-                          </span>
+                  {(() => {
+                    const starts = slotStartsByProfessional[p.user_id] ?? []
+                    if (!starts.length) {
+                      return <div className={styles.noSlots}>Ingen ledige tider lige nu.</div>
+                    }
+                    const byDay = groupSlotStartsByDay(starts)
+                    return (
+                      <div className={styles.slotsSection}>
+                        <h2 className={styles.slotsHeading}>Ledige tider</h2>
+                        {byDay.map((day) => (
+                          <div key={day.key} className={styles.slotsDayBlock}>
+                            <div className={styles.slotsDayLabel}>{day.label}</div>
+                            <div className={styles.slotsChipRow}>
+                              {day.starts.map((slotStart) => (
+                                <button
+                                  key={slotStart}
+                                  type="button"
+                                  className={styles.slotChip}
+                                  aria-label={formatSlotAriaLabel(slotStart)}
+                                  onClick={() => void openBookingModal(p, slotStart)}
+                                >
+                                  {formatSlotTimeRange(slotStart)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         ))}
-                        {slotStartsByProfessional[p.user_id].length > 5
-                          ? ` (+${slotStartsByProfessional[p.user_id].length - 5} flere)`
-                          : ''}
-                      </>
-                    ) : (
-                      <span>Ingen ledige tider lige nu.</span>
-                    )}
-                  </div>
-                </div>
-                <div className={styles.cardAside}>
-                  <button type="button" className={styles.bookBtn} onClick={() => router.push(`/book/${p.user_id}`)}>
-                    Book tid
-                  </button>
+                      </div>
+                    )
+                  })()}
                 </div>
               </article>
             ))}
           </div>
         )}
       </section>
+
+      {bookingModal ? (
+        <div
+          className={styles.modalBackdrop}
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeBookingModal()
+          }}
+        >
+          <div
+            className={styles.modalPanel}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="booking-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="booking-modal-title" className={styles.modalTitle}>
+              Book video-konsultation
+            </h2>
+            <p className={styles.modalSubtitle}>
+              Hos <strong>{bookingModal.professionalName}</strong>
+              {bookingModal.title ? ` · ${bookingModal.title}` : ''}
+            </p>
+            <p className={styles.modalTime}>{formatBookingSummaryLine(bookingModal.slotStartMs)}</p>
+            <ul className={styles.modalList}>
+              <li>Konsultationen foregår online som videosamtale (Google Meet).</li>
+              <li>Varighed ca. {PATIENT_BOOKING_CONSULTATION_MINUTES} minutter — som vist i tidsrummet.</li>
+              <li>Dette er en forespørgsel: behandleren skal godkende tiden. Du får besked, når den er bekræftet.</li>
+              <li>Praktisk info og mødelink finder du på dit dashboard efter booking.</li>
+            </ul>
+            {freePlanBlocked && freePlanHint ? <div className={styles.modalWarn}>{freePlanHint}</div> : null}
+            {modalError ? <div className={styles.modalErr}>{modalError}</div> : null}
+            <div className={styles.modalActions}>
+              <button
+                type="button"
+                className={styles.modalBtnSecondary}
+                disabled={bookingSubmitting}
+                onClick={closeBookingModal}
+              >
+                Annuller
+              </button>
+              <button
+                type="button"
+                className={styles.modalBtnPrimary}
+                disabled={bookingSubmitting || freePlanBlocked}
+                onClick={() => void confirmBooking()}
+              >
+                {bookingSubmitting ? 'Booker…' : 'Book denne tid'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -1,12 +1,18 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
+import { isDanishPhone8Digits, normalizeDanishPhone } from '@/lib/danishPhone'
+import { ensureProfileSyncedWithAuth } from '@/lib/ensureProfileSyncedWithAuth'
+import { combineFullName, splitFullName } from '@/lib/personName'
+import { isAdminProfileRole } from '@/lib/useProfileRole'
 
 export default function GynekologOnboardingPage() {
   const router = useRouter()
-  const [professionalName, setProfessionalName] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [professionalEmail, setProfessionalEmail] = useState('')
   const [professionalPhone, setProfessionalPhone] = useState('')
   const [bio, setBio] = useState('')
@@ -15,6 +21,11 @@ export default function GynekologOnboardingPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const professionalPhoneIsValid = useMemo(
+    () => isDanishPhone8Digits(professionalPhone),
+    [professionalPhone]
+  )
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -27,11 +38,20 @@ export default function GynekologOnboardingPage() {
         return
       }
 
-      const { data: professional, error: professionalError } = await supabase
-        .from('professionals')
-        .select('approval_status,bio,professional_name,payment_information,professional_email,professional_phone')
-        .eq('user_id', user.id)
-        .maybeSingle()
+      const { data: adminCheck } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle()
+      if (isAdminProfileRole(adminCheck?.role)) {
+        router.replace('/admin')
+        return
+      }
+
+      const [{ data: professional, error: professionalError }, { data: profileRow }] = await Promise.all([
+        supabase
+          .from('professionals')
+          .select('approval_status,bio,professional_name,payment_information,professional_email,professional_phone')
+          .eq('user_id', user.id)
+          .maybeSingle(),
+        supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
+      ])
 
       if (professionalError) {
         setError(professionalError.message)
@@ -47,15 +67,20 @@ export default function GynekologOnboardingPage() {
       if (professional?.bio) {
         setBio(professional.bio)
       }
-      if (professional?.professional_name) {
-        setProfessionalName(professional.professional_name)
+      {
+        const nameSrc =
+          professional?.professional_name?.trim() || profileRow?.full_name?.trim() || ''
+        const split = splitFullName(nameSrc)
+        setFirstName(split.firstName)
+        setLastName(split.lastName)
       }
       if (professional?.payment_information) {
         setPaymentInformation(professional.payment_information)
       }
-      if (professional?.professional_email) {
-        setProfessionalEmail(professional.professional_email)
-      }
+      // Samme konto som patient/bruger: genbrug login-mail når der ikke allerede er professional_email i DB
+      setProfessionalEmail(
+        (professional?.professional_email?.trim() || user.email?.trim() || '')
+      )
       if (professional?.professional_phone) {
         setProfessionalPhone(professional.professional_phone)
       }
@@ -68,10 +93,15 @@ export default function GynekologOnboardingPage() {
 
   const submit = async () => {
     setError(null)
-    if (!professionalName.trim()) {
-      setError('Skriv venligst dit navn.')
+    if (!firstName.trim()) {
+      setError('Skriv venligst fornavn.')
       return
     }
+    if (!lastName.trim()) {
+      setError('Skriv venligst efternavn.')
+      return
+    }
+    const combinedName = combineFullName(firstName, lastName)
     if (!bio.trim()) {
       setError('Skriv venligst en kort bio.')
       return
@@ -85,7 +115,13 @@ export default function GynekologOnboardingPage() {
       return
     }
     if (!professionalPhone.trim()) {
-      setError('Indtast venligst mobilnummer.')
+      setError('Indtast venligst telefonnummer.')
+      return
+    }
+    if (!isDanishPhone8Digits(professionalPhone)) {
+      setError(
+        'Indtast et gyldigt dansk telefonnummer: præcis 8 cifre (fx mobil). Du må gerne skrive +45 foran.'
+      )
       return
     }
     if (!confirmed) {
@@ -104,24 +140,44 @@ export default function GynekologOnboardingPage() {
       return
     }
 
+    const ensured = await ensureProfileSyncedWithAuth(supabase, user, {
+      intendedRole: 'professional',
+    })
+    if (!ensured.ok) {
+      setSaving(false)
+      setError(`Kunne ikke synkronisere profil: ${ensured.message}`)
+      return
+    }
+
     const { error: upsertError } = await supabase.from('professionals').upsert(
       {
         user_id: user.id,
         title: 'Gynækolog',
-        professional_name: professionalName.trim(),
+        professional_name: combinedName,
         bio: bio.trim(),
         payment_information: paymentInformation.trim(),
         professional_email: professionalEmail.trim(),
-        professional_phone: professionalPhone.trim(),
+        professional_phone: normalizeDanishPhone(professionalPhone),
         public_profile: false,
         approval_status: 'pending',
       },
       { onConflict: 'user_id' }
     )
 
-    setSaving(false)
     if (upsertError) {
+      setSaving(false)
       setError(upsertError.message)
+      return
+    }
+
+    const { error: profileNameError } = await supabase
+      .from('profiles')
+      .update({ full_name: combinedName })
+      .eq('id', user.id)
+
+    setSaving(false)
+    if (profileNameError) {
+      setError(`Profil gemt som gynækolog, men fulde navn i profil kunne ikke opdateres: ${profileNameError.message}`)
       return
     }
 
@@ -129,8 +185,10 @@ export default function GynekologOnboardingPage() {
     router.refresh()
   }
 
-  const goBack = () => {
-    router.back()
+  /** Logger ud og går til forsiden (undgår `router.back()` → patient-onboarding i historik). */
+  const goBack = async () => {
+    await supabase.auth.signOut()
+    window.location.assign('/')
   }
 
   if (loading) {
@@ -148,18 +206,41 @@ export default function GynekologOnboardingPage() {
         <p className="mt-2 text-sm text-slate-600">
           Udfyld din professionelle bio. Når du sender, bliver din profil markeret som pending indtil admin godkender.
         </p>
+        <p className="mt-2 text-xs text-slate-500">
+          Vil du ikke fortsætte nu?{' '}
+          <Link href="/logout" className="font-medium text-slate-800 underline hover:text-slate-950">
+            Fortryd og log ud
+          </Link>{' '}
+          — du kan logge ind igen senere.
+        </p>
 
-        <div className="mt-6">
-          <label htmlFor="professionalName" className="mb-2 block text-sm font-medium text-slate-800">
-            Navn
-          </label>
-          <input
-            id="professionalName"
-            value={professionalName}
-            onChange={(event) => setProfessionalName(event.target.value)}
-            className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm"
-            placeholder="Fx Jonas G. Møller"
-          />
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="professionalFirstName" className="mb-2 block text-sm font-medium text-slate-800">
+              Fornavn
+            </label>
+            <input
+              id="professionalFirstName"
+              value={firstName}
+              onChange={(event) => setFirstName(event.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm"
+              placeholder="Fx Jonas"
+              autoComplete="given-name"
+            />
+          </div>
+          <div>
+            <label htmlFor="professionalLastName" className="mb-2 block text-sm font-medium text-slate-800">
+              Efternavn
+            </label>
+            <input
+              id="professionalLastName"
+              value={lastName}
+              onChange={(event) => setLastName(event.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm"
+              placeholder="Fx Møller"
+              autoComplete="family-name"
+            />
+          </div>
         </div>
 
         <div className="mt-4">
@@ -178,15 +259,22 @@ export default function GynekologOnboardingPage() {
 
         <div className="mt-4">
           <label htmlFor="professionalPhone" className="mb-2 block text-sm font-medium text-slate-800">
-            Mobilnummer
+            Telefon (dansk mobil eller 8 cifre)
           </label>
           <input
             id="professionalPhone"
             value={professionalPhone}
             onChange={(event) => setProfessionalPhone(event.target.value)}
             className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm"
-            placeholder="fx 12345678"
+            placeholder="fx 12 34 56 78 eller +45 12 34 56 78"
+            inputMode="tel"
+            autoComplete="tel"
           />
+          {professionalPhone.trim().length > 0 && !professionalPhoneIsValid ? (
+            <p className="mt-1.5 text-sm text-red-600">
+              Brug 8 cifre (dansk nummer). +45 eller mellemrum er fint — de fjernes automatisk ved gem.
+            </p>
+          ) : null}
         </div>
 
         <div className="mt-4">
@@ -215,8 +303,12 @@ export default function GynekologOnboardingPage() {
           />
         </div>
 
-        <label className="mt-4 flex items-start gap-3 text-sm text-slate-700">
+        <label
+          htmlFor="gyn-admin-confirm"
+          className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-slate-700"
+        >
           <input
+            id="gyn-admin-confirm"
             type="checkbox"
             checked={confirmed}
             onChange={(event) => setConfirmed(event.target.checked)}
@@ -233,15 +325,21 @@ export default function GynekologOnboardingPage() {
 
         <button
           type="button"
-          onClick={goBack}
+          onClick={() => void goBack()}
           className="mt-5 mr-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"
         >
-          Tilbage
+          Tilbage og log ud
         </button>
         <button
           type="button"
           onClick={submit}
-          disabled={saving}
+          disabled={
+            saving ||
+            !confirmed ||
+            !professionalPhoneIsValid ||
+            !firstName.trim() ||
+            !lastName.trim()
+          }
           className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
           {saving ? 'Sender...' : 'Send til godkendelse'}

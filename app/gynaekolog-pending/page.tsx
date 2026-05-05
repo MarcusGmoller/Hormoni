@@ -1,14 +1,24 @@
 'use client'
 
+import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabaseClient'
+import { isAdminProfileRole, useProfileRole } from '@/lib/useProfileRole'
 
 export default function GynekologPendingPage() {
   const router = useRouter()
+  const { loading, role } = useProfileRole()
 
-  const signOut = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
+  useEffect(() => {
+    if (loading) return
+    if (isAdminProfileRole(role)) router.replace('/admin')
+  }, [loading, role, router])
+
+  if (!loading && isAdminProfileRole(role)) {
+    return (
+      <main className="mx-auto max-w-lg p-6">
+        <p className="text-sm text-gray-600">Omdirigerer til admin…</p>
+      </main>
+    )
   }
 
   return (
@@ -19,13 +29,6 @@ export default function GynekologPendingPage() {
           Din professionelle profil er oprettet som <strong>pending</strong>. En admin skal godkende den,
           før du kan bruge gynækolog-dashboardet.
         </p>
-        <button
-          type="button"
-          onClick={signOut}
-          className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white"
-        >
-          Log ud
-        </button>
       </div>
     </main>
   )

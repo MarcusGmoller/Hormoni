@@ -1,4 +1,8 @@
+'use client'
+
 import Link from 'next/link'
+import { useSupabaseUser } from '@/lib/useSupabaseUser'
+import { isAdminProfileRole, useProfileRole } from '@/lib/useProfileRole'
 
 const sageBtn = 'bg-[#849b87] hover:bg-[#738a7a]'
 
@@ -15,6 +19,11 @@ export default function MarketingSiteHeader({
   currentPage = 'home',
 }: MarketingSiteHeaderProps) {
   const hash = (id: string) => `${anchorBase}#${id}`
+  const user = useSupabaseUser()
+  const { loading: roleLoading, role } = useProfileRole()
+  const isAdmin = Boolean(user && !roleLoading && isAdminProfileRole(role))
+  const dashboardHref = isAdmin ? '/admin' : '/dashboard'
+  const dashboardLabel = isAdmin ? 'Admin dashboard' : 'Mit dashboard'
 
   return (
     <header className="sticky top-0 z-50 border-b border-black/5 bg-white/95 backdrop-blur">
@@ -23,12 +32,21 @@ export default function MarketingSiteHeader({
           <Link href="/" className="text-lg font-semibold tracking-tight text-[#333333]">
             Hormoni(e)
           </Link>
-          <Link
-            href="/login"
-            className={`rounded-full px-4 py-2 text-sm font-semibold text-white shadow-sm transition lg:hidden ${sageBtn}`}
-          >
-            Start
-          </Link>
+          {user ? (
+            <Link
+              href={dashboardHref}
+              className={`rounded-full px-4 py-2 text-sm font-semibold text-white shadow-sm transition lg:hidden ${sageBtn}`}
+            >
+              {dashboardLabel}
+            </Link>
+          ) : (
+            <Link
+              href="/login"
+              className={`rounded-full px-4 py-2 text-sm font-semibold text-white shadow-sm transition lg:hidden ${sageBtn}`}
+            >
+              Start
+            </Link>
+          )}
         </div>
         <nav className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm font-medium text-[#4a4a4a] lg:flex-1">
           <a href={hash('om')} className="transition hover:text-[#333333]">
@@ -63,16 +81,31 @@ export default function MarketingSiteHeader({
               Priser
             </a>
           )}
-          <Link href="/login" className="transition hover:text-[#333333]">
-            Log ind
-          </Link>
+          {user ? (
+            <Link href={dashboardHref} className="transition hover:text-[#333333]">
+              {dashboardLabel}
+            </Link>
+          ) : (
+            <Link href="/login" className="transition hover:text-[#333333]">
+              Log ind
+            </Link>
+          )}
         </nav>
-        <Link
-          href="/login"
-          className={`hidden rounded-full px-5 py-2.5 text-center text-sm font-semibold text-white shadow-sm transition lg:inline-flex ${sageBtn}`}
-        >
-          Start dit forløb
-        </Link>
+        {user ? (
+          <Link
+            href={dashboardHref}
+            className={`hidden rounded-full px-5 py-2.5 text-center text-sm font-semibold text-white shadow-sm transition lg:inline-flex ${sageBtn}`}
+          >
+            {dashboardLabel}
+          </Link>
+        ) : (
+          <Link
+            href="/login"
+            className={`hidden rounded-full px-5 py-2.5 text-center text-sm font-semibold text-white shadow-sm transition lg:inline-flex ${sageBtn}`}
+          >
+            Start dit forløb
+          </Link>
+        )}
       </div>
     </header>
   )

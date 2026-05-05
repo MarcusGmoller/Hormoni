@@ -5,6 +5,24 @@ export type CreateMeetResult = {
   eventId: string | null
 }
 
+function readGoogleCalendarEnv() {
+  return {
+    clientEmail: process.env.GOOGLE_CALENDAR_CLIENT_EMAIL,
+    privateKey: process.env.GOOGLE_CALENDAR_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    calendarId: process.env.GOOGLE_CALENDAR_ID,
+  }
+}
+
+/** Sandt når alle tre påkrævede variabler er sat (bruges af API-ruten). */
+export function isGoogleCalendarConfigured(): boolean {
+  const { clientEmail, privateKey, calendarId } = readGoogleCalendarEnv()
+  return Boolean(clientEmail && privateKey && calendarId)
+}
+
+export const GOOGLE_CALENDAR_CONFIG_HELP =
+  'Tilføj i .env.local: GOOGLE_CALENDAR_CLIENT_EMAIL, GOOGLE_CALENDAR_PRIVATE_KEY (med \\n i nøglen), GOOGLE_CALENDAR_ID. Se env.example. ' +
+  'Lokalt uden Google: sæt BOOKING_DEV_PLACEHOLDER_MEET=true (kun development).'
+
 /**
  * Creates a Google Calendar event with a real Google Meet conference.
  *
@@ -26,16 +44,12 @@ export async function createGoogleMeetCalendarEvent(params: {
   timeZone?: string
   attendeeEmails?: string[]
 }): Promise<CreateMeetResult> {
-  const clientEmail = process.env.GOOGLE_CALENDAR_CLIENT_EMAIL
-  const privateKey = process.env.GOOGLE_CALENDAR_PRIVATE_KEY?.replace(/\\n/g, '\n')
-  const calendarId = process.env.GOOGLE_CALENDAR_ID
+  const { clientEmail, privateKey, calendarId } = readGoogleCalendarEnv()
   const impersonate = process.env.GOOGLE_CALENDAR_IMPERSONATE?.trim() || undefined
   const timeZone = params.timeZone ?? process.env.GOOGLE_CALENDAR_TIMEZONE ?? 'Europe/Copenhagen'
 
   if (!clientEmail || !privateKey || !calendarId) {
-    throw new Error(
-      'Google Calendar er ikke konfigureret. Sæt GOOGLE_CALENDAR_CLIENT_EMAIL, GOOGLE_CALENDAR_PRIVATE_KEY og GOOGLE_CALENDAR_ID.'
-    )
+    throw new Error(`Google Calendar er ikke konfigureret. ${GOOGLE_CALENDAR_CONFIG_HELP}`)
   }
 
   const auth = new google.auth.JWT({

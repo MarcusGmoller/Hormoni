@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { isDanishPhone8Digits, normalizeDanishPhone } from '@/lib/danishPhone'
+import { combineFullName, splitFullName } from '@/lib/personName'
 import { supabase } from '@/lib/supabaseClient'
 
 const inputClass =
@@ -64,7 +66,8 @@ function OnboardingPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  const [fullName, setFullName] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [address, setAddress] = useState('')
   const [contactEmail, setContactEmail] = useState('')
   const [phone, setPhone] = useState('')
@@ -85,42 +88,46 @@ function OnboardingPageContent() {
   const [saving, setSaving] = useState(false)
   const [cprChecking, setCprChecking] = useState(false)
   const [cprError, setCprError] = useState<string | null>(null)
+  /** Når CPR allerede ligger i vault (fx efter tilbage fra betaling), kræves ikke 10 cifre i feltet igen. */
+  const [hasCprVault, setHasCprVault] = useState(false)
 
   const normalizeEmail = (value: string) => value.trim()
-
-  const normalizePhone = (value: string) => {
-    const trimmed = value.trim()
-    const withoutSpaces = trimmed.replace(/\s+/g, '')
-    const withoutCountry = withoutSpaces.startsWith('+45') ? withoutSpaces.slice(3) : withoutSpaces
-    return withoutCountry.replace(/\D/g, '')
-  }
 
   const emailIsValid = useMemo(() => {
     const e = normalizeEmail(contactEmail)
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)
   }, [contactEmail])
 
-  const phoneIsValid = useMemo(() => {
-    const p = normalizePhone(phone)
-    return /^\d{8}$/.test(p)
-  }, [phone])
+  const phoneIsValid = useMemo(() => isDanishPhone8Digits(phone), [phone])
 
   const normalizeCpr = (value: string) => value.replace(/\D/g, '')
   const cprIsValid = useMemo(() => /^\d{10}$/.test(normalizeCpr(cprNumber)), [cprNumber])
+  const cprSatisfiedForFlow = useMemo(
+    () => cprIsValid || hasCprVault,
+    [cprIsValid, hasCprVault]
+  )
 
-  const fullNameIsValid = useMemo(() => fullName.trim().length > 1, [fullName])
+  const firstNameIsValid = useMemo(() => firstName.trim().length > 0, [firstName])
+  const lastNameIsValid = useMemo(() => lastName.trim().length > 0, [lastName])
   const addressIsValid = useMemo(() => address.trim().length > 3, [address])
 
   const stepOneIsValid =
-    fullNameIsValid && addressIsValid && emailIsValid && phoneIsValid && cprIsValid && acceptedTerms
+    firstNameIsValid &&
+    lastNameIsValid &&
+    addressIsValid &&
+    emailIsValid &&
+    phoneIsValid &&
+    cprSatisfiedForFlow &&
+    acceptedTerms
   const planIds = useMemo(() => new Set(availablePlans.map((p) => p.id)), [availablePlans])
   const planStepIsValid = plansLoaded && planIds.has(selectedPlanId)
   const formIsValid = stepOneIsValid && planStepIsValid
 
   useEffect(() => {
-    setError(null)
+    queueMicrotask(() => setError(null))
   }, [
-    fullName,
+    firstName,
+    lastName,
     address,
     contactEmail,
     phone,
@@ -185,6 +192,10 @@ function OnboardingPageContent() {
 
   const handleStepOneNext = async () => {
     if (!stepOneIsValid || cprChecking) return
+    if (hasCprVault && !cprIsValid) {
+      setStep(2)
+      return
+    }
     const ok = await validateCprOnStepOne()
     if (!ok) return
     setStep(2)
@@ -199,7 +210,8 @@ function OnboardingPageContent() {
       setStep(1)
       return
     }
-    router.back()
+    // Ikke `router.back()`: historik er ofte /login → proxy sender indlogget bruger til /dashboard → /onboarding igen (loop).
+    router.replace('/')
   }
 
   const save = async () => {
@@ -233,10 +245,10 @@ function OnboardingPageContent() {
     }
 
     const payload = {
-      full_name: fullName.trim(),
+      full_name: combineFullName(firstName, lastName),
       address: address.trim(),
       contact_email: normalizeEmail(contactEmail),
-      phone: normalizePhone(phone),
+      phone: normalizeDanishPhone(phone),
       symptoms: selectedSymptoms,
       health_conditions: selectedHealthConditions,
       medications: medications.trim() || null,
@@ -247,25 +259,33 @@ function OnboardingPageContent() {
     }
 
     const normalizedCpr = normalizeCpr(cprNumber)
-    const cprHash = await toSha256Hex(normalizedCpr)
 
-    const accessToken = refreshData.session.access_token
-    const cprRes = await fetch(`${window.location.origin}/api/user-cpr-vault`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        cpr_ciphertext: normalizedCpr,
-        cpr_hash: cprHash,
-      }),
-    })
-    const cprJson = (await cprRes.json().catch(() => ({}))) as { error?: string }
-    if (!cprRes.ok) {
+    if (!cprIsValid && !hasCprVault) {
       setSaving(false)
-      setError(cprJson.error ?? 'Kunne ikke gemme CPR. Prøv igen.')
+      setError('CPR-nummer mangler eller er ugyldigt.')
       return
+    }
+
+    if (cprIsValid) {
+      const cprHash = await toSha256Hex(normalizedCpr)
+      const accessToken = refreshData.session.access_token
+      const cprRes = await fetch(`${window.location.origin}/api/user-cpr-vault`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          cpr_ciphertext: normalizedCpr,
+          cpr_hash: cprHash,
+        }),
+      })
+      const cprJson = (await cprRes.json().catch(() => ({}))) as { error?: string }
+      if (!cprRes.ok) {
+        setSaving(false)
+        setError(cprJson.error ?? 'Kunne ikke gemme CPR. Prøv igen.')
+        return
+      }
     }
 
     const { error: updateError } = await supabase
@@ -315,10 +335,18 @@ function OnboardingPageContent() {
       } = await supabase.auth.getUser()
       if (!user) return
 
-      const [{ data: profile }, { data: planRows, error: plansError }] = await Promise.all([
-        supabase.from('profiles').select('subscription_tier').eq('id', user.id).single(),
-        supabase.from('plans').select('id,name,description').order('id'),
-      ])
+      const [{ data: profile }, { data: planRows, error: plansError }, { data: vaultRow }] =
+        await Promise.all([
+          supabase
+            .from('profiles')
+            .select(
+              'subscription_tier,full_name,address,contact_email,phone,symptoms,health_conditions,medications,additional_notes,profile_completed'
+            )
+            .eq('id', user.id)
+            .maybeSingle(),
+          supabase.from('plans').select('id,name,description').order('id'),
+          supabase.from('user_cpr_vault').select('user_id').eq('user_id', user.id).maybeSingle(),
+        ])
 
       if (cancelled) return
 
@@ -329,6 +357,27 @@ function OnboardingPageContent() {
       const plans = ((planRows ?? []) as PlanRow[]).filter((plan) => plan.id === 'free' || plan.id === 'pro')
       setAvailablePlans(plans)
       const ids = new Set(plans.map((p) => p.id))
+
+      if (profile) {
+        if (profile.full_name) {
+          const sp = splitFullName(profile.full_name)
+          setFirstName(sp.firstName)
+          setLastName(sp.lastName)
+        }
+        if (profile.address) setAddress(profile.address)
+        if (profile.contact_email) setContactEmail(profile.contact_email)
+        if (profile.phone) {
+          const p = String(profile.phone).replace(/\D/g, '')
+          setPhone(p.length === 8 ? p : profile.phone)
+        }
+        if (Array.isArray(profile.symptoms)) setSelectedSymptoms(profile.symptoms)
+        if (Array.isArray(profile.health_conditions)) setSelectedHealthConditions(profile.health_conditions)
+        if (profile.medications != null) setMedications(profile.medications)
+        if (profile.additional_notes != null) setAdditionalNotes(profile.additional_notes)
+        if (profile.profile_completed) setAcceptedTerms(true)
+      }
+
+      setHasCprVault(!!vaultRow)
 
       const rawTier = profile?.subscription_tier ?? 'free'
       const legacyMapped =
@@ -355,7 +404,7 @@ function OnboardingPageContent() {
   useEffect(() => {
     const stepParam = searchParams.get('step')
     if (stepParam === '1' || stepParam === '2' || stepParam === '3') {
-      setStep(Number(stepParam) as 1 | 2 | 3)
+      queueMicrotask(() => setStep(Number(stepParam) as 1 | 2 | 3))
     }
   }, [searchParams])
 
@@ -375,10 +424,10 @@ function OnboardingPageContent() {
           Gynækologer
         </Link>
         <Link
-          href="/login"
+          href="/logout"
           className="rounded-full px-4 py-2 text-sm font-medium text-[#4a4a4a] transition hover:bg-[#f8faf9] hover:text-[#333333]"
         >
-          Log ind
+          Fortryd oprettelsen
         </Link>
       </nav>
 
@@ -389,6 +438,11 @@ function OnboardingPageContent() {
         <h1 className="mt-4 text-2xl font-bold tracking-tight text-[#333333] md:text-[1.65rem]">Opret din profil</h1>
         <p className="mt-2 text-sm leading-relaxed text-[#777777]">
           Udfyld dine oplysninger, så vi kan tilpasse dit forløb.
+        </p>
+        <p className="mt-3 text-xs leading-relaxed text-[#777777]">
+          Du er allerede logget ind under oprettelsen (kontoen oprettes ved tilmelding). Vil du ikke fortsætte nu, så vælg{' '}
+          <strong className="font-medium text-[#333333]">Fortryd oprettelsen</strong> ovenfor — så logger vi dig ud. Du kan
+          logge ind igen senere med samme e-mail og fortsætte, hvor du slap.
         </p>
         <div className="mt-6 flex items-center gap-3">
           <div className="flex flex-1 gap-1.5">
@@ -418,18 +472,33 @@ function OnboardingPageContent() {
       <div className="space-y-6">
         {step === 1 && (
           <div className="space-y-5 rounded-2xl border border-black/5 bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)] md:p-8">
-            <div>
-              <label className={labelClass} htmlFor="onboarding-fullname">
-                Fulde navn
-              </label>
-              <input
-                id="onboarding-fullname"
-                className={inputClass}
-                placeholder="Fx Anna Jensen"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                autoComplete="name"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className={labelClass} htmlFor="onboarding-firstname">
+                  Fornavn
+                </label>
+                <input
+                  id="onboarding-firstname"
+                  className={inputClass}
+                  placeholder="Fx Anna"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  autoComplete="given-name"
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="onboarding-lastname">
+                  Efternavn
+                </label>
+                <input
+                  id="onboarding-lastname"
+                  className={inputClass}
+                  placeholder="Fx Jensen"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  autoComplete="family-name"
+                />
+              </div>
             </div>
 
             <div>
@@ -695,7 +764,11 @@ function OnboardingPageContent() {
             </button>
           ) : (
             <button onClick={save} disabled={saving || !formIsValid} className={sageBtn} type="button">
-              {saving ? 'Gemmer…' : 'Afslut og gå til dit dashboard'}
+              {saving
+                ? 'Gemmer…'
+                : selectedPlanId === 'pro'
+                  ? 'Gå til betaling'
+                  : 'Afslut og gå til dit dashboard'}
             </button>
           )}
         </div>

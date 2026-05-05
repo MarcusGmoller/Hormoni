@@ -78,7 +78,10 @@ export default function HealthLogPage() {
   }
 
   useEffect(() => {
-    loadLogs()
+    queueMicrotask(() => {
+      void loadLogs()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const publish = async () => {

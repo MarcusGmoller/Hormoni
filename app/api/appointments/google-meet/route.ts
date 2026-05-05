@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { createGoogleMeetCalendarEvent } from '@/lib/google-calendar-meet'
+import {
+  createGoogleMeetCalendarEvent,
+  isGoogleCalendarConfigured,
+} from '@/lib/google-calendar-meet'
 
 type Body = {
   startTime?: string
@@ -83,13 +86,33 @@ export async function POST(req: Request) {
       minute: '2-digit',
     })
 
-    const { meetUrl } = await createGoogleMeetCalendarEvent({
-      summary: `Videokonsultation: ${patientName} / ${proName}`,
-      description: `Videokonsultation booket via appen.\n\nMødelinket kan bruges fra ${openDa} (15 min før start).`,
-      startIso: start.toISOString(),
-      endIso: end.toISOString(),
-      attendeeEmails: [patientEmail, proEmail].filter((e): e is string => Boolean(e)),
-    })
+    let meetUrl: string
+
+    if (isGoogleCalendarConfigured()) {
+      const created = await createGoogleMeetCalendarEvent({
+        summary: `Videokonsultation: ${patientName} / ${proName}`,
+        description: `Videokonsultation booket via appen.\n\nMødelinket kan bruges fra ${openDa} (15 min før start).`,
+        startIso: start.toISOString(),
+        endIso: end.toISOString(),
+        attendeeEmails: [patientEmail, proEmail].filter((e): e is string => Boolean(e)),
+      })
+      meetUrl = created.meetUrl
+    } else if (
+      process.env.NODE_ENV === 'development' &&
+      process.env.BOOKING_DEV_PLACEHOLDER_MEET === 'true'
+    ) {
+      meetUrl =
+        'https://meet.google.com/placeholder-dev-udvikling-konfigurer-google-calendar-for-rigtigt-link'
+    } else {
+      return NextResponse.json(
+        {
+          error:
+            'Google Calendar er ikke konfigureret. Sæt GOOGLE_CALENDAR_CLIENT_EMAIL, GOOGLE_CALENDAR_PRIVATE_KEY og GOOGLE_CALENDAR_ID i .env.local (se env.example). ' +
+            'Til lokal test uden Google: BOOKING_DEV_PLACEHOLDER_MEET=true (kun når Next kører i development).',
+        },
+        { status: 503 }
+      )
+    }
 
     return NextResponse.json({
       googleMeetUrl: meetUrl,

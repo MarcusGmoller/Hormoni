@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import { syncProfileAfterAuthAndResolvePath } from '@/lib/authPostLogin'
+import { ensureProfileSyncedWithAuth } from '@/lib/ensureProfileSyncedWithAuth'
 
 function LoginForm() {
   const router = useRouter()
@@ -18,28 +19,41 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const err = searchParams.get('error')
-    if (err && err !== 'confirm') {
-      setError(decodeURIComponent(err))
-    } else if (err === 'confirm') {
-      setError('Ugyldig eller udløbet bekræftelseslink. Prøv at oprette konto igen eller log ind.')
-    }
+    queueMicrotask(() => {
+      const err = searchParams.get('error')
+      if (err && err !== 'confirm') {
+        setError(decodeURIComponent(err))
+        return
+      }
+      if (err === 'confirm') {
+        setError('Ugyldig eller udløbet bekræftelseslink. Prøv at oprette konto igen eller log ind.')
+        return
+      }
+      if (searchParams.get('signedOut') === '1') {
+        setError(null)
+        setMessage(
+          'Du er logget ud. Du kan logge ind igen når som helst og fortsætte oprettelsen, hvis den ikke er færdig.'
+        )
+      }
+    })
   }, [searchParams])
 
-  const signInWithGoogle = async (selectedRole: 'user' | 'professional') => {
+  const signInWithOAuthProvider = async (
+    provider: 'google' | 'facebook',
+    selectedRole: 'user' | 'professional'
+  ) => {
     setError(null)
     setMessage(null)
     const callbackPath =
-      selectedRole === 'professional' ? '/auth/callback/professional' : '/auth/oauth/user'
+      selectedRole === 'professional'
+        ? '/auth/callback/professional'
+        : authMode === 'signup'
+          ? '/auth/callback/user-signup'
+          : '/auth/callback/user-signin'
     const callbackUrl = new URL(callbackPath, location.origin)
-    callbackUrl.searchParams.set('selected_role', selectedRole)
-    if (selectedRole === 'user') {
-      const intent = authMode === 'signup' ? 'signup' : 'signin'
-      callbackUrl.searchParams.set('intent', intent)
-    }
 
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
+      provider,
       options: {
         redirectTo: callbackUrl.toString(),
       },
@@ -53,6 +67,14 @@ function LoginForm() {
     } = await supabase.auth.getUser()
     if (!user) {
       setError('Kunne ikke hente gynækolog-bruger efter login.')
+      return
+    }
+
+    const ensured = await ensureProfileSyncedWithAuth(supabase, user, {
+      intendedRole: 'professional',
+    })
+    if (!ensured.ok) {
+      setError(`Profil kunne ikke synkroniseres: ${ensured.message}`)
       return
     }
 
@@ -130,6 +152,9 @@ function LoginForm() {
           password,
           options: {
             emailRedirectTo: confirmUrl,
+            ...(role === 'professional'
+              ? { data: { registration_channel: 'professional' } }
+              : {}),
           },
         })
 
@@ -329,24 +354,32 @@ function LoginForm() {
         {role === 'user' && (
           <>
             <p className="mb-2 text-xs text-gray-500">
-              Som bruger kan du logge ind med e-mail/adgangskode eller Google.
+              Som bruger kan du logge ind med e-mail/adgangskode, Google eller Facebook.
             </p>
           </>
         )}
 
         {role === 'professional' && (
           <p className="mb-4 text-sm text-gray-600">
-            Som gynækolog kan du oprette dig med e-mail eller Google. Nye profiler markeres som pending og skal godkendes af admin.
+            Som gynækolog kan du oprette dig med e-mail, Google eller Facebook. Nye profiler markeres som
+            pending og skal godkendes af admin.
           </p>
         )}
 
         <div className="space-y-3">
           <button
             type="button"
-            onClick={() => signInWithGoogle(role)}
+            onClick={() => signInWithOAuthProvider('google', role)}
             className="w-full rounded bg-black px-4 py-3 text-white"
           >
             {role === 'user' ? 'Fortsæt med Google' : 'Log ind med Google som gynækolog'}
+          </button>
+          <button
+            type="button"
+            onClick={() => signInWithOAuthProvider('facebook', role)}
+            className="w-full rounded bg-[#1877F2] px-4 py-3 font-medium text-white hover:bg-[#166FE5]"
+          >
+            {role === 'user' ? 'Fortsæt med Facebook' : 'Log ind med Facebook som gynækolog'}
           </button>
         </div>
 

@@ -98,6 +98,16 @@ export default function DoctorLayoutClient({ children }: { children: ReactNode }
         return
       }
 
+      const { data: profileRoleRow } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .maybeSingle()
+      if (profileRoleRow?.role === 'admin') {
+        router.replace('/admin')
+        return
+      }
+
       const { data: professional } = await supabase
         .from('professionals')
         .select('approval_status,professional_name')
@@ -113,10 +123,12 @@ export default function DoctorLayoutClient({ children }: { children: ReactNode }
     }
 
     loadDoctorMeta()
-  }, [])
+  }, [router])
 
   useEffect(() => {
-    refreshBadges()
+    queueMicrotask(() => {
+      void refreshBadges()
+    })
     const interval = window.setInterval(refreshBadges, 15000)
     const onFocus = () => refreshBadges()
     window.addEventListener('focus', onFocus)

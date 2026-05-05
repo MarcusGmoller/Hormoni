@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
+import AdminSupportInbox from '@/components/admin-support/AdminSupportInbox'
 
 type PendingProfessional = {
   user_id: string
@@ -20,44 +21,70 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
+  const getAccessToken = async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    return session?.access_token ?? null
+  }
+
   const loadPending = async () => {
     setLoading(true)
     setError(null)
-    const { data, error: loadError } = await supabase
-      .from('professionals')
-      .select('user_id,professional_name,professional_email,professional_phone,title,bio,created_at,approval_status')
-      .eq('approval_status', 'pending')
-      .order('created_at', { ascending: true })
+    const accessToken = await getAccessToken()
+    if (!accessToken) {
+      setError('Session udløbet. Log ind igen.')
+      setPending([])
+      setLoading(false)
+      return
+    }
 
-    if (loadError) {
-      setError(loadError.message)
+    const response = await fetch('/api/admin/pending-professionals', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+    const json = (await response.json().catch(() => ({}))) as {
+      error?: string
+      pending?: PendingProfessional[]
+    }
+
+    if (!response.ok) {
+      setError(json.error ?? 'Kunne ikke hente pending-profiler.')
       setPending([])
     } else {
-      setPending((data ?? []) as PendingProfessional[])
+      setPending(json.pending ?? [])
     }
     setLoading(false)
   }
 
   useEffect(() => {
-    loadPending()
+    queueMicrotask(() => {
+      void loadPending()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only pending-liste
   }, [])
 
   const approve = async (professionalId: string) => {
     setBusyId(professionalId)
     setError(null)
-    const { error: approveError } = await supabase
-      .from('professionals')
-      .update({
-        approval_status: 'approved',
-        approved_at: new Date().toISOString(),
-        public_profile: true,
-      })
-      .eq('user_id', professionalId)
-      .eq('approval_status', 'pending')
+    const accessToken = await getAccessToken()
+    if (!accessToken) {
+      setBusyId(null)
+      setError('Session udløbet. Log ind igen.')
+      return
+    }
 
+    const response = await fetch('/api/admin/approve-professional', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ professionalUserId: professionalId }),
+    })
+    const json = (await response.json().catch(() => ({}))) as { error?: string }
     setBusyId(null)
-    if (approveError) {
-      setError(approveError.message)
+    if (!response.ok) {
+      setError(json.error ?? 'Godkendelse mislykkedes.')
       return
     }
 
@@ -67,10 +94,7 @@ export default function AdminPage() {
   const reject = async (professionalId: string) => {
     setBusyId(professionalId)
     setError(null)
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const accessToken = session?.access_token
+    const accessToken = await getAccessToken()
     if (!accessToken) {
       setBusyId(null)
       setError('Session udløbet. Log ind igen.')
@@ -152,6 +176,14 @@ export default function AdminPage() {
           })}
         </div>
       )}
+
+      <section className="mt-10 border-t border-slate-200 pt-8">
+        <h2 className="mb-2 text-lg font-semibold text-slate-900">Support fra brugere og behandlere</h2>
+        <p className="mb-4 text-sm text-slate-600">
+          Samtaler markeret som administration — svar direkte her.
+        </p>
+        <AdminSupportInbox />
+      </section>
     </main>
   )
 }

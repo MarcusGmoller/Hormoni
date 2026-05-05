@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { routeByProfessionalState, type ProfessionalForRouting } from '@/lib/authRouting'
 import { supabase } from '@/lib/supabaseClient'
 import styles from './dashboardPage.module.css'
 
@@ -52,6 +53,18 @@ type Prescription = {
   dosage: string | null
   instructions: string | null
   issued_at: string
+}
+
+/** Række fra DB med evt. legacy kolonnenavne (migration / views). */
+type RawPrescriptionRow = {
+  id: string
+  issued_at: string
+  medication_name?: string | null
+  medication?: string | null
+  dosage?: string | null
+  dose?: string | null
+  instructions?: string | null
+  instruction?: string | null
 }
 
 type HealthConditionLog = {
@@ -123,8 +136,6 @@ export default function DashboardPage() {
   const [appointmentsLoading, setAppointmentsLoading] = useState(true)
   const [appointmentsError, setAppointmentsError] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [messagesLoading, setMessagesLoading] = useState(true)
-  const [messagesError, setMessagesError] = useState<string | null>(null)
   const [conversationsById, setConversationsById] = useState<Record<string, Conversation>>({})
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([])
   const [prescriptionsError, setPrescriptionsError] = useState<string | null>(null)
@@ -133,17 +144,49 @@ export default function DashboardPage() {
   const [nextAppointmentDetailOpen, setNextAppointmentDetailOpen] = useState(false)
   const [patientUserId, setPatientUserId] = useState<string | null>(null)
   const [inboxSeenTick, setInboxSeenTick] = useState(0)
+  const [dashboardTimelineAsOfMs] = useState(() => Date.now())
   const [openTreatmentStepId, setOpenTreatmentStepId] = useState<string | null>(null)
   const [showPrescriptionHistory, setShowPrescriptionHistory] = useState(false)
   const [dashboardLocked, setDashboardLocked] = useState(false)
+  const [hasEverSubscribedPro, setHasEverSubscribedPro] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [cancelSubscriptionDialogOpen, setCancelSubscriptionDialogOpen] = useState(false)
+  const [cancelSubscriptionBusy, setCancelSubscriptionBusy] = useState(false)
+  const [cancelSubscriptionError, setCancelSubscriptionError] = useState<string | null>(null)
 
   const signOutUser = async () => {
     await supabase.auth.signOut()
     router.push('/login')
+  }
+
+  const cancelSubscriptionToFree = async () => {
+    if (cancelSubscriptionBusy) return
+    setCancelSubscriptionBusy(true)
+    setCancelSubscriptionError(null)
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) {
+      setCancelSubscriptionBusy(false)
+      router.push('/login')
+      return
+    }
+
+    const { error } = await supabase.from('profiles').update({ subscription_tier: 'free' }).eq('id', user.id)
+
+    if (error) {
+      setCancelSubscriptionBusy(false)
+      setCancelSubscriptionError(error.message)
+      return
+    }
+
+    setSubscriptionPlanId('free')
+    setDashboardLocked(true)
+    setCancelSubscriptionBusy(false)
+    setCancelSubscriptionDialogOpen(false)
   }
 
   const deleteMyProfile = async () => {
@@ -198,14 +241,16 @@ export default function DashboardPage() {
       const [{ data: profile, error }, { data: planRows, error: plansError }] = await Promise.all([
         supabase
           .from('profiles')
-          .select('profile_completed,role,full_name,subscription_tier')
+          .select('profile_completed,role,full_name,subscription_tier,has_ever_subscribed_pro')
           .eq('id', user.id)
-          .single(),
+          .maybeSingle(),
         supabase.from('plans').select('id,name').order('id'),
       ])
       const { data: professional } = await supabase
         .from('professionals')
-        .select('approval_status')
+        .select(
+          'approval_status,bio,professional_name,payment_information,professional_email,professional_phone'
+        )
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -227,8 +272,9 @@ export default function DashboardPage() {
         router.push('/gynaekolog-dashboard')
         return
       }
-      if (professional) {
-        router.push('/gynaekolog-pending')
+
+      if (profile?.role === 'professional' || professional) {
+        router.push(routeByProfessionalState(professional as ProfessionalForRouting))
         return
       }
 
@@ -236,7 +282,8 @@ export default function DashboardPage() {
         typeof window !== 'undefined' &&
         new URLSearchParams(window.location.search).get('oauth_signin') === '1'
 
-      if (!profile?.profile_completed && !oauthSignin) {
+      // Ingen profiles-række (fx trigger fejlede) eller uafsluttet onboarding — ikke .single() som giver PGRST116
+      if (!profile || (!profile.profile_completed && !oauthSignin)) {
         router.push('/onboarding')
         return
       }
@@ -250,6 +297,7 @@ export default function DashboardPage() {
       }
 
       setDisplayName(profile.full_name ?? 'Bruger')
+      setPatientUserId(user.id)
       const rawTier = profile.subscription_tier ?? 'free'
       const legacyMapped =
         rawTier === 'starter'
@@ -264,12 +312,11 @@ export default function DashboardPage() {
           : plans[0]?.id ?? 'free'
       setSubscriptionPlanId(resolvedPlanId)
       setDashboardLocked(resolvedPlanId !== 'pro')
+      setHasEverSubscribedPro(!!(profile as { has_ever_subscribed_pro?: boolean }).has_ever_subscribed_pro)
       setLoading(false)
 
       setAppointmentsLoading(true)
       setAppointmentsError(null)
-      setMessagesLoading(true)
-      setMessagesError(null)
       setPrescriptionsError(null)
       setHealthLogsError(null)
 
@@ -300,13 +347,13 @@ export default function DashboardPage() {
         setPrescriptionsError(rawPrescriptionsError.message)
         setPrescriptions([])
       } else {
-        const normalized = ((rawPrescriptions ?? []) as any[]).map((row) => ({
+        const normalized = ((rawPrescriptions ?? []) as RawPrescriptionRow[]).map((row) => ({
           id: row.id,
           medication_name: row.medication_name ?? row.medication ?? 'Ukendt medicin',
           dosage: row.dosage ?? row.dose ?? null,
           instructions: row.instructions ?? row.instruction ?? null,
           issued_at: row.issued_at,
-        })) as Prescription[]
+        }))
         setPrescriptions(normalized)
       }
 
@@ -330,8 +377,7 @@ export default function DashboardPage() {
         .or(`patient_id.eq.${user.id},doctor_id.eq.${user.id}`)
 
       if (rawConversationsError) {
-        setMessagesLoading(false)
-        setMessagesError(rawConversationsError.message)
+        console.error(rawConversationsError)
         setConversationsById({})
         setMessages([])
       } else {
@@ -343,7 +389,6 @@ export default function DashboardPage() {
         setConversationsById(conversationMap)
 
         if (nextConversations.length === 0) {
-          setMessagesLoading(false)
           setMessages([])
         } else {
           const conversationIds = nextConversations.map((conversation) => conversation.id)
@@ -354,10 +399,8 @@ export default function DashboardPage() {
             .order('created_at', { ascending: false })
             .limit(20)
 
-          setMessagesLoading(false)
-
           if (rawMessagesError) {
-            setMessagesError(rawMessagesError.message)
+            console.error(rawMessagesError)
             setMessages([])
           } else {
             setMessages((rawMessages ?? []) as Message[])
@@ -385,13 +428,16 @@ export default function DashboardPage() {
         .select('id,full_name')
         .in('id', relatedProfileIds)
 
-      const namesById = (professionals ?? []).reduce<Record<string, string>>((acc, professional: any) => {
-        if (professional?.id && professional?.full_name) {
-          acc[professional.id] = professional.full_name
-        }
+      const namesById = (professionals ?? []).reduce<Record<string, string>>(
+        (acc, professional: { id: string; full_name: string | null }) => {
+          if (professional.id && professional.full_name) {
+            acc[professional.id] = professional.full_name
+          }
 
-        return acc
-      }, {})
+          return acc
+        },
+        {}
+      )
 
       setProfileNamesById(namesById)
     }
@@ -452,7 +498,7 @@ export default function DashboardPage() {
     (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
   )[0]
   const treatmentDays = useMemo(() => {
-    const nowMs = Date.now()
+    const nowMs = dashboardTimelineAsOfMs
     const firstCompletedConsultation = appointments
       .filter((appointment) => {
         const startsAtMs = new Date(appointment.start_time).getTime()
@@ -465,7 +511,7 @@ export default function DashboardPage() {
     const firstMs = new Date(firstCompletedConsultation.start_time).getTime()
     const daysSinceFirst = Math.floor((nowMs - firstMs) / (1000 * 60 * 60 * 24))
     return Math.max(0, daysSinceFirst)
-  }, [appointments])
+  }, [appointments, dashboardTimelineAsOfMs])
   const normalizedSubscriptionPlanId =
     subscriptionPlanId === 'starter'
       ? 'free'
@@ -475,6 +521,7 @@ export default function DashboardPage() {
   const canUpgradeToPro = availablePlans.some((plan) => plan.id === 'pro')
   const shouldShowUpgradeCard = normalizedSubscriptionPlanId !== 'pro' && canUpgradeToPro
   const unreadDoctorMessagesCount = useMemo(() => {
+    void inboxSeenTick
     if (!patientUserId) return 0
     const seenRaw =
       typeof window !== 'undefined'
@@ -506,7 +553,7 @@ export default function DashboardPage() {
       ]
     }
 
-    const nowMs = Date.now()
+    const nowMs = dashboardTimelineAsOfMs
     const firstFutureIndex = sorted.findIndex((appointment) => new Date(appointment.start_time).getTime() > nowMs)
 
     return sorted.map((appointment, index) => {
@@ -533,7 +580,7 @@ export default function DashboardPage() {
         state,
       }
     })
-  }, [appointments, profileNamesById])
+  }, [appointments, profileNamesById, dashboardTimelineAsOfMs])
   const graphLogs = useMemo(() => {
     return [...healthLogs]
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
@@ -609,20 +656,34 @@ export default function DashboardPage() {
           <div className={styles.headerLeft}>
             <h1 className={styles.title}>Hej, {displayName}</h1>
             <p className={styles.lead}>
-              Dit dashboard er låst, indtil du vælger et abonnement. Du kan stadig booke én gratis konsultation.
+              {hasEverSubscribedPro
+                ? 'Dit dashboard er låst på Free. Som tidligere betalende kunde kan du ikke booke gratis intro-konsultation — opgrader til Pro for at booke nye tider.'
+                : 'Dit dashboard er låst, indtil du vælger et abonnement. Du kan stadig booke én gratis konsultation.'}
             </p>
           </div>
         </header>
 
         <section className={styles.content}>
           <div className={styles.quickGrid}>
-            <button type="button" className={styles.quickCard} onClick={() => router.push('/professionals')}>
-              <div className={styles.quickEmoji} aria-hidden="true">
-                📅
+            {hasEverSubscribedPro ? (
+              <div className={styles.quickCardMuted}>
+                <div className={styles.quickEmoji} aria-hidden="true">
+                  📅
+                </div>
+                <div className={styles.quickTitle}>Booking kræver Pro</div>
+                <div className={styles.quickMeta}>
+                  Gratis intro-konsultation på Free gælder ikke efter du har haft betalende abonnement.
+                </div>
               </div>
-              <div className={styles.quickTitle}>Book gratis konsultation</div>
-              <div className={styles.quickMeta}>Du kan booke én aktiv tid uden abonnement</div>
-            </button>
+            ) : (
+              <button type="button" className={styles.quickCard} onClick={() => router.push('/professionals')}>
+                <div className={styles.quickEmoji} aria-hidden="true">
+                  📅
+                </div>
+                <div className={styles.quickTitle}>Book gratis konsultation</div>
+                <div className={styles.quickMeta}>Du kan booke én aktiv tid uden abonnement</div>
+              </button>
+            )}
             <button
               type="button"
               className={styles.quickCard}
@@ -652,6 +713,18 @@ export default function DashboardPage() {
           <button type="button" className={styles.profileBtn} onClick={() => router.push('/messages')}>
             Kontakt Hormoni
           </button>
+          {normalizedSubscriptionPlanId === 'pro' ? (
+            <button
+              type="button"
+              className={styles.cancelSubscriptionBtn}
+              onClick={() => {
+                setCancelSubscriptionError(null)
+                setCancelSubscriptionDialogOpen(true)
+              }}
+            >
+              Opsig abonnement
+            </button>
+          ) : null}
           <button type="button" className={styles.logoutBtn} onClick={signOutUser}>
             Log ud
           </button>
@@ -1167,6 +1240,63 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {cancelSubscriptionDialogOpen ? (
+        <div
+          className={styles.dialogBackdrop}
+          role="presentation"
+          onClick={() => !cancelSubscriptionBusy && setCancelSubscriptionDialogOpen(false)}
+        >
+          <div
+            className={styles.dialogPanel}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cancel-subscription-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={styles.dialogHeader}>
+              <h2 id="cancel-subscription-title" className={styles.dialogTitle}>
+                Opsig abonnement?
+              </h2>
+              <button
+                type="button"
+                className={styles.dialogClose}
+                aria-label="Luk"
+                onClick={() => setCancelSubscriptionDialogOpen(false)}
+                disabled={cancelSubscriptionBusy}
+              >
+                ×
+              </button>
+            </div>
+            <div className={styles.dialogBody}>
+              <p className={styles.dialogValueMuted}>
+                Du skifter til gratis abonnement. Dit dashboard bliver begrænset, og som tidligere Pro-kunde kan du ikke
+                booke gratis intro-konsultation på Free — kun nye brugere på Free har det tilbud. Du kan til enhver tid
+                opgradere igen under Abonnement.
+              </p>
+              {cancelSubscriptionError ? <div className={styles.errorBanner}>{cancelSubscriptionError}</div> : null}
+            </div>
+            <div className={styles.dialogFooter}>
+              <button
+                type="button"
+                className={styles.btnOutline}
+                onClick={() => setCancelSubscriptionDialogOpen(false)}
+                disabled={cancelSubscriptionBusy}
+              >
+                Annuller
+              </button>
+              <button
+                type="button"
+                className={styles.cancelSubscriptionBtn}
+                onClick={cancelSubscriptionToFree}
+                disabled={cancelSubscriptionBusy}
+              >
+                {cancelSubscriptionBusy ? 'Opsiger…' : 'Ja, opsig Pro'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {deleteDialogOpen ? (
         <div className={styles.dialogBackdrop} role="presentation" onClick={() => setDeleteDialogOpen(false)}>

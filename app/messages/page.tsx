@@ -1,14 +1,17 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
+import docStyles from '@/app/doctor/doctorPage.module.css'
 
 type Conversation = {
   id: string
   patient_id: string
   doctor_id: string
   created_from_appointment_id: string | null
+  kind?: 'clinical' | 'admin' | string | null
+  created_at?: string
 }
 
 type Message = {
@@ -19,38 +22,46 @@ type Message = {
   conversation_id: string
 }
 
-type TimelineItem =
-  | { type: 'date'; key: string; label: string }
-  | { type: 'message'; key: string; message: Message }
-
-const toDateKey = (value: string) => {
-  const date = new Date(value)
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+type PatientBookingRow = {
+  id: string
+  professional_id: string
+  status: string
+  start_time: string
 }
 
-const formatDatePill = (value: string) => {
-  const date = new Date(value)
-  const today = new Date()
-  const isToday =
-    date.getDate() === today.getDate() &&
-    date.getMonth() === today.getMonth() &&
-    date.getFullYear() === today.getFullYear()
-  if (isToday) return 'I dag'
-  return date.toLocaleDateString('da-DK', { day: 'numeric', month: 'long' })
+function sortConversationsList(list: Conversation[]) {
+  return [...list].sort((a, b) => {
+    if (a.kind === 'admin' && b.kind !== 'admin') return -1
+    if (a.kind !== 'admin' && b.kind === 'admin') return 1
+    const ta = a.created_at ? new Date(a.created_at).getTime() : 0
+    const tb = b.created_at ? new Date(b.created_at).getTime() : 0
+    return tb - ta
+  })
 }
 
-export default function MessagesPage() {
+const appointmentStatusMetaDa = (status: string) => {
+  if (status === 'confirmed') return 'Bekræftet tid'
+  if (status === 'requested') return 'Afventer bekræftelse fra behandler'
+  return status
+}
+
+function MessagesPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [userId, setUserId] = useState<string | null>(null)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [selectedConversationId, setSelectedConversationId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
+  const [previewMessages, setPreviewMessages] = useState<Message[]>([])
   const [profileNamesById, setProfileNamesById] = useState<Record<string, string>>({})
   const [activeCounterpartName, setActiveCounterpartName] = useState<string | null>(null)
   const [messageBody, setMessageBody] = useState('')
   const [loading, setLoading] = useState(true)
+  const [threadLoading, setThreadLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [patientAppointments, setPatientAppointments] = useState<PatientBookingRow[]>([])
+  const [startingWithProfessionalId, setStartingWithProfessionalId] = useState<string | null>(null)
 
   const scrollerRef = useRef<HTMLDivElement | null>(null)
 
@@ -67,9 +78,13 @@ export default function MessagesPage() {
 
       setUserId(user.id)
 
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+
       const { data: rawConversations, error: conversationError } = await supabase
         .from('conversations')
-        .select('id,patient_id,doctor_id,created_from_appointment_id')
+        .select('id,patient_id,doctor_id,created_from_appointment_id,kind,created_at')
         .or(`patient_id.eq.${user.id},doctor_id.eq.${user.id}`)
         .order('created_at', { ascending: false })
 
@@ -79,14 +94,78 @@ export default function MessagesPage() {
         return
       }
 
-      const nextConversations = (rawConversations ?? []) as Conversation[]
-      setConversations(nextConversations)
-      if (nextConversations.length > 0) {
-        setSelectedConversationId(nextConversations[0].id)
+      let nextConversations = (rawConversations ?? []) as Conversation[]
+
+      if (session?.access_token) {
+        const ensureRes = await fetch('/api/support/ensure-admin-conversation', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        })
+        if (ensureRes.ok) {
+          const ensureJson = (await ensureRes.json().catch(() => ({}))) as {
+            conversationId?: string
+            conversation?: Conversation
+          }
+          const ensured = ensureJson.conversation
+          const cid = ensureJson.conversationId
+          if (ensured?.id && !nextConversations.some((c) => c.id === ensured.id)) {
+            nextConversations = [ensured, ...nextConversations]
+          } else if (cid && !nextConversations.some((c) => c.id === cid)) {
+            const { data: extra } = await supabase
+              .from('conversations')
+              .select('id,patient_id,doctor_id,created_from_appointment_id,kind,created_at')
+              .eq('id', cid)
+              .maybeSingle()
+            if (extra) nextConversations = [extra as Conversation, ...nextConversations]
+          }
+        }
       }
 
+      nextConversations = sortConversationsList(nextConversations)
+
+      setConversations(nextConversations)
+
+      const { data: bookingRows, error: bookingErr } = await supabase
+        .from('appointments')
+        .select('id,professional_id,status,start_time')
+        .eq('user_id', user.id)
+        .in('status', ['confirmed', 'requested'])
+        .order('start_time', { ascending: false })
+
+      if (bookingErr) {
+        setPatientAppointments([])
+      } else {
+        setPatientAppointments((bookingRows ?? []) as PatientBookingRow[])
+      }
+
+      const conversationIds = nextConversations.map((c) => c.id)
+      if (conversationIds.length > 0) {
+        const { data: rawPreview } = await supabase
+          .from('messages')
+          .select('id,body,created_at,sender_id,conversation_id')
+          .in('conversation_id', conversationIds)
+          .order('created_at', { ascending: false })
+          .limit(120)
+        setPreviewMessages((rawPreview ?? []) as Message[])
+      } else {
+        setPreviewMessages([])
+      }
+
+      const preferAdmin =
+        searchParams.get('admin') === '1' || searchParams.get('thread') === 'admin'
+      const adminConv = nextConversations.find((c) => c.kind === 'admin')
+      const initial =
+        preferAdmin && adminConv ? adminConv.id : nextConversations[0]?.id
+      if (initial) setSelectedConversationId(initial)
+
+      const bookingProIds = Array.from(
+        new Set(((bookingErr ? [] : bookingRows) ?? []).map((a) => a.professional_id))
+      )
       const relatedIds = Array.from(
-        new Set(nextConversations.flatMap((c) => [c.patient_id, c.doctor_id]).filter(Boolean))
+        new Set([
+          ...nextConversations.flatMap((c) => [c.patient_id, c.doctor_id]).filter(Boolean),
+          ...bookingProIds,
+        ])
       )
 
       if (relatedIds.length > 0) {
@@ -102,7 +181,7 @@ export default function MessagesPage() {
     }
 
     load()
-  }, [router])
+  }, [router, searchParams])
 
   useEffect(() => {
     if (!userId) return
@@ -116,6 +195,7 @@ export default function MessagesPage() {
         return
       }
 
+      setThreadLoading(true)
       const { data, error: messageError } = await supabase
         .from('messages')
         .select('id,body,created_at,sender_id,conversation_id')
@@ -124,13 +204,15 @@ export default function MessagesPage() {
 
       if (messageError) {
         setError(messageError.message)
+        setThreadLoading(false)
         return
       }
 
       setMessages((data ?? []) as Message[])
+      setThreadLoading(false)
     }
 
-    loadMessages()
+    void loadMessages()
   }, [selectedConversationId])
 
   useEffect(() => {
@@ -143,6 +225,88 @@ export default function MessagesPage() {
     [conversations, selectedConversationId]
   )
 
+  const adminConversation = useMemo(
+    () => conversations.find((c) => c.kind === 'admin') ?? null,
+    [conversations]
+  )
+
+  const professionalsEligibleToStart = useMemo(() => {
+    if (!userId) return []
+    const byProfessional = new Map<string, PatientBookingRow>()
+    for (const a of patientAppointments) {
+      if (!byProfessional.has(a.professional_id)) {
+        byProfessional.set(a.professional_id, a)
+      }
+    }
+    const out: {
+      professionalId: string
+      appointmentId: string
+      status: string
+      startTime: string
+    }[] = []
+    for (const [professionalId, row] of byProfessional) {
+      const hasThread = conversations.some(
+        (c) => c.kind !== 'admin' && c.patient_id === userId && c.doctor_id === professionalId
+      )
+      if (!hasThread) {
+        out.push({
+          professionalId,
+          appointmentId: row.id,
+          status: row.status,
+          startTime: row.start_time,
+        })
+      }
+    }
+    return out
+  }, [userId, patientAppointments, conversations])
+
+  const latestMessageByConversationId = useMemo(() => {
+    return previewMessages.reduce<Record<string, Message>>((acc, message) => {
+      const current = acc[message.conversation_id]
+      if (!current || new Date(message.created_at).getTime() > new Date(current.created_at).getTime()) {
+        acc[message.conversation_id] = message
+      }
+      return acc
+    }, {})
+  }, [previewMessages])
+
+  const clinicalSidebarRows = useMemo(() => {
+    if (!userId) return []
+    const clinical = conversations.filter((c) => c.kind !== 'admin')
+    return clinical
+      .map((conversation) => {
+        const counterpartId =
+          conversation.patient_id === userId ? conversation.doctor_id : conversation.patient_id
+        const name = profileNamesById[counterpartId] ?? 'Behandler'
+        const initials =
+          name
+            .split(/\s+/)
+            .slice(0, 2)
+            .map((part) => part[0]?.toUpperCase() ?? '')
+            .join('') || 'B'
+        const latest = latestMessageByConversationId[conversation.id] ?? null
+        const needsReply = Boolean(latest && userId && latest.sender_id !== userId)
+        return { conversation, name, initials, latest, needsReply }
+      })
+      .sort((a, b) => {
+        const ta = a.latest ? new Date(a.latest.created_at).getTime() : 0
+        const tb = b.latest ? new Date(b.latest.created_at).getTime() : 0
+        return tb - ta
+      })
+  }, [conversations, userId, profileNamesById, latestMessageByConversationId])
+
+  const adminPinnedLatest = adminConversation
+    ? latestMessageByConversationId[adminConversation.id] ?? null
+    : null
+
+  const adminPinnedNeedsReply = Boolean(
+    adminPinnedLatest && userId && adminPinnedLatest.sender_id !== userId
+  )
+
+  const isAdminThreadSelected = Boolean(
+    adminConversation && selectedConversationId === adminConversation.id
+  )
+
   const otherPartyId =
     selectedConversation && userId
       ? selectedConversation.patient_id === userId
@@ -153,6 +317,11 @@ export default function MessagesPage() {
   useEffect(() => {
     const loadActiveCounterpartName = async () => {
       if (!selectedConversation || !userId) {
+        setActiveCounterpartName(null)
+        return
+      }
+
+      if (selectedConversation.kind === 'admin') {
         setActiveCounterpartName(null)
         return
       }
@@ -181,28 +350,16 @@ export default function MessagesPage() {
       setActiveCounterpartName(data?.full_name ?? null)
     }
 
-    loadActiveCounterpartName()
+    void loadActiveCounterpartName()
   }, [selectedConversation, userId])
 
   const profileFullName = otherPartyId ? profileNamesById[otherPartyId] : null
   const otherPartyName =
-    activeCounterpartName ||
-    profileFullName ||
-    (selectedConversation ? 'Gynækolog' : 'Samtale')
-
-  const timelineItems = useMemo(() => {
-    const items: TimelineItem[] = []
-    let previousDateKey: string | null = null
-    messages.forEach((m) => {
-      const dateKey = toDateKey(m.created_at)
-      if (dateKey !== previousDateKey) {
-        items.push({ type: 'date', key: `date-${dateKey}`, label: formatDatePill(m.created_at) })
-        previousDateKey = dateKey
-      }
-      items.push({ type: 'message', key: m.id, message: m })
-    })
-    return items
-  }, [messages])
+    selectedConversation?.kind === 'admin'
+      ? 'Administrationen'
+      : activeCounterpartName ||
+        profileFullName ||
+        (selectedConversation ? 'Behandler' : 'Beskeder')
 
   const sendMessage = async () => {
     if (!userId || !selectedConversationId) return
@@ -228,8 +385,62 @@ export default function MessagesPage() {
       return
     }
 
-    setMessages((current) => [...current, data as Message])
+    const inserted = data as Message
+    setMessages((current) => [...current, inserted])
+    setPreviewMessages((prev) => [inserted, ...prev])
     setMessageBody('')
+  }
+
+  const startClinicalConversation = async (professionalId: string) => {
+    if (!userId || startingWithProfessionalId) return
+    setStartingWithProfessionalId(professionalId)
+    setError(null)
+
+    const { data: appt } = await supabase
+      .from('appointments')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('professional_id', professionalId)
+      .in('status', ['confirmed', 'requested'])
+      .order('start_time', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const { data: inserted, error: insErr } = await supabase
+      .from('conversations')
+      .insert({
+        patient_id: userId,
+        doctor_id: professionalId,
+        kind: 'clinical',
+        created_from_appointment_id: appt?.id ?? null,
+      })
+      .select('id,patient_id,doctor_id,created_from_appointment_id,kind,created_at')
+      .single()
+
+    let conv = inserted as Conversation | null
+    if (insErr) {
+      const isDup = (insErr as { code?: string }).code === '23505'
+      if (isDup) {
+        const { data: existing } = await supabase
+          .from('conversations')
+          .select('id,patient_id,doctor_id,created_from_appointment_id,kind,created_at')
+          .eq('patient_id', userId)
+          .eq('doctor_id', professionalId)
+          .maybeSingle()
+        conv = (existing as Conversation) ?? null
+      }
+      if (!conv) {
+        setError(insErr.message)
+        setStartingWithProfessionalId(null)
+        return
+      }
+    }
+
+    setStartingWithProfessionalId(null)
+    if (!conv?.id) return
+
+    setConversations((prev) => sortConversationsList([...prev.filter((c) => c.id !== conv!.id), conv!]))
+    setSelectedConversationId(conv.id)
   }
 
   if (loading) return <div className="text-sm text-slate-500">Loader beskeder...</div>
@@ -237,102 +448,163 @@ export default function MessagesPage() {
   return (
     <div className="wrap">
       <div className="backRow">
-        <button
-          type="button"
-          onClick={() => router.push('/dashboard')}
-          className="backBtn"
-        >
+        <button type="button" onClick={() => router.push('/dashboard')} className="backBtn">
           ← Tilbage til overblik
         </button>
       </div>
 
-      {error && <div className="error">Fejl: {error}</div>}
+      {error ? <div className="error">Fejl: {error}</div> : null}
 
-      <section className="shell">
-        <header className="topbar">
-          <div className="title">{otherPartyName}</div>
-
-          {conversations.length > 1 && (
-            <select
-              className="select"
-              value={selectedConversationId}
-              onChange={(e) => setSelectedConversationId(e.target.value)}
-            >
-              {conversations.map((conversation) => {
-                const counterpartId =
-                  userId && conversation.patient_id === userId ? conversation.doctor_id : conversation.patient_id
-                return (
-                  <option key={conversation.id} value={conversation.id}>
-                    {(counterpartId && profileNamesById[counterpartId]) ?? 'Samtale'}
-                  </option>
-                )
-              })}
-            </select>
-          )}
-        </header>
-
-        <div className="notice">
-          <span className="noticeIcon">💬</span>
-          <span>Du kan altid skrive til din behandler. Vi svarer normalt inden for 24 timer på hverdage.</span>
-        </div>
-
-        <div ref={scrollerRef} className="messages">
-          <div className="messagesInner">
-            {timelineItems.map((item) => {
-              if (item.type === 'date') {
-                return (
-                  <div key={item.key} className="dateRow">
-                    <span className="datePill">{item.label}</span>
+      <div className={docStyles.messagesShell}>
+        <aside className={docStyles.messagesSidebar}>
+          <div className={docStyles.list}>
+            {adminConversation ? (
+              <button
+                type="button"
+                className={`${docStyles.row} ${docStyles.rowPinned} ${isAdminThreadSelected ? docStyles.rowActive : ''} ${adminPinnedNeedsReply ? docStyles.rowNeedsReply : ''}`}
+                onClick={() => setSelectedConversationId(adminConversation.id)}
+              >
+                <div className={docStyles.avatar}>A</div>
+                <div className={docStyles.rowMain}>
+                  <div className={docStyles.name}>
+                    <span className={docStyles.pinnedBadge}>Fastgjort</span>
+                    Administrationen
                   </div>
-                )
-              }
-
-              const m = item.message
-              const own = m.sender_id === userId
-
-              return (
-                <div key={item.key} className={`row ${own ? 'own' : 'their'}`}>
-                  {!own && <div className="avatar" aria-hidden="true" />}
-
-                  <div className="col">
-                    {!own && <div className="name">{otherPartyName}</div>}
-
-                    <div className={`bubble ${own ? 'bubbleOwn' : 'bubbleTheir'}`}>{m.body}</div>
-
-                    <div className={`time ${own ? 'timeOwn' : 'timeTheir'}`}>
-                      {new Date(m.created_at).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })}
-                    </div>
+                  <div className={docStyles.meta}>
+                    {adminPinnedLatest?.body?.slice(0, 80) ??
+                      'Skriv her ved problemer med platformen, din konto eller andet praktisk.'}
                   </div>
                 </div>
+                {adminPinnedNeedsReply ? <span className={docStyles.replyBadge}>Afventer svar</span> : null}
+              </button>
+            ) : null}
+
+            {professionalsEligibleToStart.map((p) => {
+              const name = profileNamesById[p.professionalId] ?? 'Din behandler'
+              const initials =
+                name
+                  .split(/\s+/)
+                  .slice(0, 2)
+                  .map((part) => part[0]?.toUpperCase() ?? '')
+                  .join('') || '+'
+              const busy = startingWithProfessionalId !== null
+              return (
+                <button
+                  key={`start-${p.professionalId}`}
+                  type="button"
+                  disabled={busy}
+                  className={`${docStyles.row} startConvRow`}
+                  onClick={() => void startClinicalConversation(p.professionalId)}
+                >
+                  <div className={docStyles.avatar}>{initials}</div>
+                  <div className={docStyles.rowMain}>
+                    <div className={docStyles.name}>Start samtale med {name}</div>
+                    <div className={docStyles.meta}>
+                      {startingWithProfessionalId === p.professionalId
+                        ? 'Opretter…'
+                        : `${appointmentStatusMetaDa(p.status)} · ${new Date(p.startTime).toLocaleString('da-DK', {
+                            day: 'numeric',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}`}
+                    </div>
+                  </div>
+                </button>
               )
             })}
 
-            {selectedConversationId && messages.length === 0 && (
-              <div className="empty">Ingen beskeder i denne tråd endnu.</div>
+            {clinicalSidebarRows.map((row) => (
+              <button
+                key={row.conversation.id}
+                type="button"
+                className={`${docStyles.row} ${selectedConversationId === row.conversation.id ? docStyles.rowActive : ''} ${row.needsReply ? docStyles.rowNeedsReply : ''}`}
+                onClick={() => setSelectedConversationId(row.conversation.id)}
+              >
+                <div className={docStyles.avatar}>{row.initials}</div>
+                <div className={docStyles.rowMain}>
+                  <div className={docStyles.name}>{row.name}</div>
+                  <div className={docStyles.meta}>
+                    {row.latest?.body?.slice(0, 80) ?? 'Ingen beskeder endnu'}
+                  </div>
+                </div>
+                {row.needsReply ? <span className={docStyles.replyBadge}>Afventer svar</span> : null}
+              </button>
+            ))}
+
+            {clinicalSidebarRows.length === 0 && professionalsEligibleToStart.length === 0 ? (
+              <div className={docStyles.metaMuted}>Ingen behandler-samtaler endnu. Book en konsultation for at skrive til en behandler.</div>
+            ) : null}
+          </div>
+        </aside>
+
+        <section className={docStyles.messageThread}>
+          <div className={docStyles.threadTopbar}>
+            <div className={docStyles.threadTitle}>{otherPartyName}</div>
+          </div>
+
+          <div className={docStyles.threadNotice}>
+            <span aria-hidden="true">💬</span>
+            <span>
+              {selectedConversation?.kind === 'admin'
+                ? 'Her skriver du med Hormoni-administrationen. Tråden er adskilt fra din behandler — skriv hvis der er problemer med platformen, din konto eller andet praktisk.'
+                : 'Skriv med din behandler her. Samme tråd vises hos gynækologen.'}
+            </span>
+          </div>
+
+          <div className={docStyles.threadMessages} ref={scrollerRef}>
+            {threadLoading ? (
+              <div className={docStyles.meta}>Loader beskeder...</div>
+            ) : messages.length === 0 ? (
+              <div className={docStyles.meta}>Ingen beskeder i denne tråd endnu.</div>
+            ) : (
+              messages.map((m) => {
+                const own = m.sender_id === userId
+                return (
+                  <div key={m.id} className={`${docStyles.msgRow} ${own ? docStyles.msgOwn : docStyles.msgTheir}`}>
+                    <div
+                      className={`${docStyles.msgBubble} ${own ? docStyles.msgBubbleOwn : docStyles.msgBubbleTheir}`}
+                    >
+                      {m.body}
+                    </div>
+                    <div className={docStyles.msgTime}>
+                      {new Date(m.created_at).toLocaleTimeString('da-DK', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </div>
+                  </div>
+                )
+              })
             )}
           </div>
-        </div>
 
-        <footer className="composer">
-          <textarea
-            className="input"
-            value={messageBody}
-            onChange={(e) => setMessageBody(e.target.value)}
-            placeholder="Skriv din besked..."
-            rows={1}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                sendMessage()
-              }
-            }}
-          />
-
-          <button className="sendBtn" type="button" onClick={sendMessage} disabled={sending || !selectedConversationId}>
-            {sending ? '…' : '➤'}
-          </button>
-        </footer>
-      </section>
+          <div className={docStyles.threadComposer}>
+            <textarea
+              className={docStyles.threadInput}
+              rows={1}
+              placeholder="Skriv besked..."
+              value={messageBody}
+              disabled={!selectedConversationId}
+              onChange={(e) => setMessageBody(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void sendMessage()
+                }
+              }}
+            />
+            <button
+              type="button"
+              className={docStyles.threadSendBtn}
+              disabled={sending || !selectedConversationId}
+              onClick={() => void sendMessage()}
+            >
+              {sending ? '…' : '➤'}
+            </button>
+          </div>
+        </section>
+      </div>
 
       <style jsx>{`
         .wrap {
@@ -372,228 +644,28 @@ export default function MessagesPage() {
           margin-bottom: 12px;
         }
 
-        .shell {
-          min-height: 560px;
-          height: min(70vh, 720px);
-          background: #f7f5f2;
-          border: 1px solid #ece7e1;
-          border-radius: 18px;
-          overflow: hidden;
-          display: flex;
-          flex-direction: column;
+        :global(.startConvRow) {
+          border: 1px dashed #c7d2fe;
+          background: linear-gradient(90deg, rgba(99, 102, 241, 0.06) 0%, transparent 14px);
         }
 
-        .topbar {
-          flex-shrink: 0;
-          background: #ffffff;
-          border-bottom: 1px solid #eee8e1;
-          padding: 14px 14px 12px;
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
+        :global(.startConvRow:hover:not(:disabled)) {
+          background: #f5f3ff;
         }
 
-        .title {
-          font-size: 16px;
-          font-weight: 700;
-          color: #111827;
-          line-height: 1.2;
-        }
-
-        .select {
-          width: 100%;
-          border: 1px solid #e5e7eb;
-          border-radius: 12px;
-          padding: 10px 12px;
-          font-size: 14px;
-          outline: none;
-          background: #fff;
-        }
-
-        .notice {
-          flex-shrink: 0;
-          margin: 12px 14px 0;
-          background: #fffdfa;
-          border: 1px solid #eee5dc;
-          border-radius: 14px;
-          padding: 10px 12px;
-          font-size: 13px;
-          color: #374151;
-          display: flex;
-          gap: 10px;
-          align-items: flex-start;
-        }
-
-        .noticeIcon {
-          line-height: 1;
-          margin-top: 1px;
-        }
-
-        .messages {
-          flex: 1 1 0;
-          min-height: 0;
-          overflow-y: auto;
-          overflow-x: hidden;
-          padding: 16px 14px 12px;
-        }
-
-        .messagesInner {
-          min-height: 100%;
-          display: flex;
-          flex-direction: column;
-          gap: 14px;
-          justify-content: flex-end;
-        }
-
-        .messagesInner > .dateRow,
-        .messagesInner > .row,
-        .messagesInner > .empty {
-          flex-shrink: 0;
-        }
-
-        .dateRow {
-          display: flex;
-          justify-content: center;
-        }
-
-        .datePill {
-          font-size: 11px;
-          color: #6b7280;
-          background: #ececec;
-          padding: 3px 10px;
-          border-radius: 999px;
-        }
-
-        .row {
-          display: flex;
-          gap: 10px;
-          align-items: flex-end;
-        }
-
-        .own {
-          justify-content: flex-end;
-        }
-
-        .their {
-          justify-content: flex-start;
-        }
-
-        .avatar {
-          width: 34px;
-          height: 34px;
-          border-radius: 999px;
-          background: #d9e3db;
-          flex: 0 0 auto;
-        }
-
-        .col {
-          max-width: 78%;
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .own .col {
-          align-items: flex-end;
-        }
-
-        .name {
-          font-size: 11px;
-          color: #6b7280;
-          padding-left: 4px;
-        }
-
-        .bubble {
-          padding: 10px 12px;
-          border-radius: 18px;
-          font-size: 14px;
-          line-height: 1.35;
-          box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
-          word-break: break-word;
-          white-space: pre-wrap;
-        }
-
-        .bubbleTheir {
-          background: #fffdfa;
-          border: 1px solid #eee5dc;
-          color: #1f2937;
-          border-bottom-left-radius: 8px;
-        }
-
-        .bubbleOwn {
-          background: #84a795;
-          color: white;
-          border: 0;
-          border-bottom-right-radius: 8px;
-        }
-
-        .time {
-          font-size: 11px;
-          color: #9ca3af;
-          padding: 0 6px;
-        }
-
-        .timeOwn {
-          text-align: right;
-        }
-
-        .timeTheir {
-          text-align: left;
-        }
-
-        .empty {
-          background: #ffffff;
-          border: 1px solid #eee8e1;
-          border-radius: 14px;
-          padding: 12px;
-          color: #6b7280;
-          font-size: 13px;
-        }
-
-        .composer {
-          flex-shrink: 0;
-          margin-top: auto;
-          background: #ffffff;
-          border-top: 1px solid #eee8e1;
-          padding: 10px 10px;
-          display: flex;
-          align-items: flex-end;
-          gap: 8px;
-        }
-
-        .input {
-          flex: 1;
-          resize: none;
-          border: 1px solid #e5e7eb;
-          border-radius: 999px;
-          padding: 10px 14px;
-          font-size: 14px;
-          outline: none;
-          line-height: 1.35;
-          max-height: 120px;
-          align-self: stretch;
-        }
-
-        .input:focus {
-          border-color: #84a795;
-        }
-
-        .sendBtn {
-          width: 44px;
-          height: 44px;
-          border-radius: 999px;
-          border: 0;
-          background: #84a795;
-          color: #fff;
-          font-size: 16px;
-          cursor: pointer;
-        }
-
-        .sendBtn:disabled {
-          opacity: 0.5;
-          cursor: default;
+        :global(.startConvRow:disabled) {
+          opacity: 0.7;
+          cursor: wait;
         }
       `}</style>
     </div>
+  )
+}
+
+export default function MessagesPage() {
+  return (
+    <Suspense fallback={<div className="text-sm text-slate-500">Loader beskeder...</div>}>
+      <MessagesPageContent />
+    </Suspense>
   )
 }

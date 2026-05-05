@@ -1,19 +1,42 @@
 import { randomUUID } from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import { getSupabaseServiceEnvOrError } from '@/lib/requireSupabaseServiceEnv'
 
 type DeleteRequestBody = {
   confirmText?: string
 }
 
-export async function POST(request: NextRequest) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+type HealthLogAnonRow = {
+  created_at: string
+  symptom_scores?: unknown
+  health_conditions?: unknown
+  notes?: string | null
+}
 
-  if (!url || !publishableKey || !serviceRoleKey) {
-    return NextResponse.json({ error: 'Mangler Supabase miljøvariabler.' }, { status: 500 })
-  }
+type AppointmentAnonRow = {
+  start_time: string
+  end_time?: string | null
+  status?: string
+  professional_id?: string
+}
+
+type PrescriptionAnonRow = {
+  issued_at: string
+  medication_name?: string | null
+  dosage?: string | null
+  instructions?: string | null
+  doctor_id?: string | null
+}
+
+type ConversationIdRow = {
+  id: string
+}
+
+export async function POST(request: NextRequest) {
+  const boot = getSupabaseServiceEnvOrError()
+  if (!boot.ok) return boot.response
+  const { url, publishableKey, serviceRoleKey } = boot.env
 
   const authHeader = request.headers.get('authorization')
   const jwt = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null
@@ -86,7 +109,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const healthRows = (healthLogs ?? []).map((row: any) => ({
+  const healthRows = (healthLogs ?? []).map((row: HealthLogAnonRow) => ({
     anon_subject_id: anonSubjectId,
     created_at: row.created_at,
     symptom_scores: row.symptom_scores ?? {},
@@ -95,7 +118,7 @@ export async function POST(request: NextRequest) {
   }))
 
   const treatmentRows = [
-    ...((appointments ?? []).map((row: any) => ({
+    ...((appointments ?? []).map((row: AppointmentAnonRow) => ({
       anon_subject_id: anonSubjectId,
       record_type: 'appointment',
       treatment_at: row.start_time,
@@ -113,7 +136,7 @@ export async function POST(request: NextRequest) {
             : null,
       },
     })) ?? []),
-    ...((prescriptions ?? []).map((row: any) => ({
+    ...((prescriptions ?? []).map((row: PrescriptionAnonRow) => ({
       anon_subject_id: anonSubjectId,
       record_type: 'prescription',
       treatment_at: row.issued_at,
@@ -136,7 +159,7 @@ export async function POST(request: NextRequest) {
   if (treatmentRows.length > 0) {
     const { error: insertTreatmentError } = await adminClient
       .from('anonymized_treatment_history')
-      .insert(treatmentRows as any[])
+      .insert(treatmentRows)
     if (insertTreatmentError) {
       return NextResponse.json({ error: insertTreatmentError.message }, { status: 400 })
     }
@@ -149,7 +172,7 @@ export async function POST(request: NextRequest) {
   if (conversationsLoadError) {
     return NextResponse.json({ error: conversationsLoadError.message }, { status: 400 })
   }
-  const patientConversationIds = (patientConversations ?? []).map((row: any) => row.id)
+  const patientConversationIds = (patientConversations ?? []).map((row: ConversationIdRow) => row.id)
 
   if (patientConversationIds.length > 0) {
     const { error: deleteConversationMessagesError } = await adminClient

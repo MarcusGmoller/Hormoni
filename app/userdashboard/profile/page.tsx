@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { combineFullName, splitFullName } from '@/lib/personName'
 import { supabase } from '@/lib/supabaseClient'
 import styles from './profilePage.module.css'
 
@@ -22,7 +23,8 @@ export default function UserProfilePage() {
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
 
-  const [fullName, setFullName] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [gender, setGender] = useState('')
   const [contactEmail, setContactEmail] = useState('')
   const [address, setAddress] = useState('')
@@ -71,7 +73,11 @@ export default function UserProfilePage() {
         return
       }
 
-      setFullName(profile.full_name ?? '')
+      {
+        const sp = splitFullName(profile.full_name)
+        setFirstName(sp.firstName)
+        setLastName(sp.lastName)
+      }
       setGender(profile.gender ?? '')
       setContactEmail(profile.contact_email ?? user.email ?? '')
       setAddress(profile.address ?? '')
@@ -99,7 +105,7 @@ export default function UserProfilePage() {
     const { error } = await supabase
       .from('profiles')
       .update({
-        full_name: fullName.trim() || null,
+        full_name: combineFullName(firstName, lastName) || null,
         gender: gender.trim() || null,
         contact_email: contactEmail.trim() || null,
         address: address.trim() || null,
@@ -133,8 +139,22 @@ export default function UserProfilePage() {
       <div className={styles.panel}>
         <div className={styles.grid}>
           <div className={styles.field}>
-            <label className={styles.label}>Fulde navn</label>
-            <input className={styles.input} value={fullName} onChange={(e) => setFullName(e.target.value)} />
+            <label className={styles.label}>Fornavn</label>
+            <input
+              className={styles.input}
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              autoComplete="given-name"
+            />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label}>Efternavn</label>
+            <input
+              className={styles.input}
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              autoComplete="family-name"
+            />
           </div>
 
           <div className={styles.field}>

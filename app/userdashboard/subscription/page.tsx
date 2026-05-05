@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import styles from './subscriptionPage.module.css'
@@ -12,7 +12,7 @@ const planBlurb: Record<string, string> = {
   pro: 'Book flere konsultationer og få fuld fleksibilitet i dit forløb.',
 }
 
-export default function SubscriptionUpgradePage() {
+function SubscriptionUpgradePageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const setupMode = searchParams.get('setup') === '1'
@@ -232,5 +232,19 @@ export default function SubscriptionUpgradePage() {
         ) : null}
       </div>
     </div>
+  )
+}
+
+export default function SubscriptionUpgradePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className={styles.shell}>
+          <p className={styles.loader}>Loader...</p>
+        </div>
+      }
+    >
+      <SubscriptionUpgradePageContent />
+    </Suspense>
   )
 }

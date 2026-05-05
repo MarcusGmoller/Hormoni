@@ -161,20 +161,20 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const deleteSteps: Array<() => Promise<{ error: { message: string } | null }>> = [
-    () => adminClient.from('messages').delete().eq('sender_id', user.id),
-    () => adminClient.from('clinical_notes').delete().eq('patient_id', user.id),
-    () => adminClient.from('prescriptions').delete().eq('patient_id', user.id),
-    () => adminClient.from('encounters').delete().eq('patient_id', user.id),
-    () => adminClient.from('patient_health_audit').delete().eq('patient_id', user.id),
-    () => adminClient.from('sensitive_access_log').delete().eq('patient_id', user.id),
-    () => adminClient.from('professional_activity').delete().eq('patient_id', user.id),
-    () => adminClient.from('conversations').delete().eq('patient_id', user.id),
-    () => adminClient.from('appointments').delete().eq('user_id', user.id),
-    () => adminClient.from('user_health_condition_logs').delete().eq('user_id', user.id),
-    () => adminClient.from('user_cpr_vault').delete().eq('user_id', user.id),
-    () => adminClient.from('subscriptions').delete().eq('user_id', user.id),
-    () => adminClient.from('profiles').delete().eq('id', user.id),
+  const deleteSteps = [
+    async () => await adminClient.from('messages').delete().eq('sender_id', user.id),
+    async () => await adminClient.from('clinical_notes').delete().eq('patient_id', user.id),
+    async () => await adminClient.from('prescriptions').delete().eq('patient_id', user.id),
+    async () => await adminClient.from('encounters').delete().eq('patient_id', user.id),
+    async () => await adminClient.from('patient_health_audit').delete().eq('patient_id', user.id),
+    async () => await adminClient.from('sensitive_access_log').delete().eq('patient_id', user.id),
+    async () => await adminClient.from('professional_activity').delete().eq('patient_id', user.id),
+    async () => await adminClient.from('conversations').delete().eq('patient_id', user.id),
+    async () => await adminClient.from('appointments').delete().eq('user_id', user.id),
+    async () => await adminClient.from('user_health_condition_logs').delete().eq('user_id', user.id),
+    async () => await adminClient.from('user_cpr_vault').delete().eq('user_id', user.id),
+    async () => await adminClient.from('subscriptions').delete().eq('user_id', user.id),
+    async () => await adminClient.from('profiles').delete().eq('id', user.id),
   ]
 
   for (const run of deleteSteps) {

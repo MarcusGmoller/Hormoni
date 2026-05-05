@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
@@ -60,7 +60,7 @@ const planBlurb: Record<string, string> = {
 
 const TOTAL_STEPS = 3
 
-export default function OnboardingPage() {
+function OnboardingPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -701,5 +701,21 @@ export default function OnboardingPage() {
         </div>
       </div>
     </main>
+  )
+}
+
+export default function OnboardingPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto max-w-2xl px-4 py-8 md:py-12">
+          <div className="space-y-5 rounded-2xl border border-black/5 bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)] md:p-8">
+            <p className="text-sm text-[#777777]">Indlæser...</p>
+          </div>
+        </main>
+      }
+    >
+      <OnboardingPageContent />
+    </Suspense>
   )
 }

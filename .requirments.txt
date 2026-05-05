@@ -1,90 +1,49 @@
 # =============================================================================
-# KOM I GANG (for nybegyndere) - Frontend projekt
+# SUPER SIMPEL GUIDE (for ikke-tekniske brugere)
 # =============================================================================
-# Denne liste er lavet til dig, der aldrig har kodet før.
-# Følg punkterne i rækkefølge.
+# I arbejder altid på en BRANCH (ikke direkte på main).
+# Jeres branch i dette projekt hedder: layout
 #
-# Vigtigt:
-# - Dette er IKKE et Python-projekt.
-# - Du skal IKKE køre: pip install -r requirements.txt
+# Brug PowerShell kommandoer herunder, præcis som de står.
 # =============================================================================
 
-1) Installer Node.js
-   - Gå til: https://nodejs.org
-   - Download "LTS" versionen (anbefalet: 20.9 eller nyere)
-   - Installer med standardvalg
+1) Åbn projektet i terminal
+   cd C:\Users\cathr\OneDrive\Desktop\Hormoni-repo
 
-2) Tjek at Node og npm virker
-   - Åbn terminal i projektmappen
-   - Kør:
-     node -v
-     npm -v
+2) Hent nyeste kode fra jeres branch (gør dette først hver gang)
+   git checkout layout
+   git pull origin layout
 
-2.1) Installer Git (kræves for GitHub)
-   - Gå til: https://git-scm.com/downloads
-   - Download og installer Git med standardvalg
-   - Tjek at Git virker:
-     git --version
+3) Installer pakker (kun når nødvendigt)
+   npm.cmd install
 
-2.2) Hent koden ned fra GitHub (clone)
-   - Åbn terminal der, hvor du vil have projektmappen
-   - Kør:
-     git clone <DIN_GITHUB_REPO_URL>
-   - Gå ind i mappen:
-     cd <REPO_NAVN>
+4) Start projektet lokalt (host)
+   npm.cmd run dev
+   Åbn derefter:
+   http://localhost:3000
 
-3) Installer projektets pakker
-   - Kør:
-     npm install
+5) Stop projektet igen
+   Tryk: Ctrl + C
+   Når du bliver spurgt "Terminate batch job (Y/N)?", skriv: Y
+   Tryk Enter
 
-4) Opret miljøfil 
-   - Lav filen: .env.local
-   - Sæt disse værdier ind:
-    NEXT_PUBLIC_SUPABASE_URL=https://cdmlkwvjmzsmgrwbcyfy.supabase.co
-    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_IMIPNFHYq2cIVb3nm0ShSg_x2u0OKxK
+6) Når du er færdig med dine ændringer (push til GitHub)
+   git add .
+   git commit -m "Kort besked om hvad du har lavet"
+   git push
 
-5) Start appen lokalt
-   - Kør:
-     npm run dev
-   - Åbn derefter:
-     http://localhost:3000
-
-6) Nyttige kommandoer
-   - Udvikling:
-     npm run dev
-   - Tjek kodekvalitet:
-     npm run lint
-   - Byg til produktion:
-     npm run build
-   - Kør produktionsbuild lokalt:
-     npm run start
-
-6.1) Gem ændringer og push til GitHub
-   - Se hvilke filer du har ændret:
-     git status
-   - Tilføj ændringer:
-     git add .
-   - Lav commit:
-     git commit -m "Kort besked om hvad du har ændret"
-   - Push til GitHub:
-     git push
-   - Første gang på en ny branch kan du få besked om:
-     git push -u origin <branch-navn>
-
-7) Hvis noget fejler
-   - Slet node_modules + package-lock.json
-   - Kør igen:
-     npm install
-     npm run dev
+7) Hvis git push bliver afvist
+   (Det betyder at der er kommet nye ændringer fra andre)
+   Kør:
+   git pull origin layout
+   Løs eventuelle konflikter hvis Git beder om det
+   Kør derefter:
+   git push
 
 # =============================================================================
-# Kort forklaring af hvad der bruges i projektet
+# VIGTIGT
 # =============================================================================
-# Runtime:
-# - Node.js >= 20.9
-#
-# Centrale npm pakker (ligger i package.json):
-# - next, react, react-dom
-# - @supabase/ssr, @supabase/supabase-js
-# - typescript, eslint, eslint-config-next, tailwindcss
+# - Skriv npm.cmd (ikke nmp)
+# - Arbejd altid på branch: layout
+# - Kør altid "git pull origin layout" før du starter arbejdet
 # =============================================================================
